@@ -8,14 +8,20 @@
 # Usage:
 #   bash install.sh                 # install
 #   bash install.sh --uninstall     # remove again
+#   curl -fsSL https://raw.githubusercontent.com/davethecoderr/minty/main/install.sh | bash
 #
 # Safe to re-run (idempotent). Only needs python3 + a terminal emulator.
 # opencode is bundled if present, otherwise minty auto-installs it on first run.
+# If run via curl|bash, files are fetched from the minty GitHub repo instead.
 
 set -euo pipefail
 
-SOURCE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SOURCE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd 2>/dev/null || echo /dev/null)"
 INSTALL_DIR="${MINTY_INSTALL_DIR:-$HOME/.local/share/minty}"
+MINTY_REPO="${MINTY_REPO:-davethecoderr/minty}"
+MINTY_REF="${MINTY_REF:-main}"
+RAW_BASE="https://raw.githubusercontent.com/$MINTY_REPO/$MINTY_REF"
+FILES=(mini_terminal.py minty_menu.py minty_theme.py minty_pkg.py minty_hist.py minty_tmux.py minty_vm.py minty_svc.py minty_proc.py minty_net.py minty.sh)
 BIN_DIR="$HOME/.local/bin"
 APPS_DIR="$HOME/.local/share/applications"
 CONFIG_KITTY="${KITTY_CONFIG_DIRECTORY:-$HOME/.config/kitty}/kitty.conf"
@@ -47,13 +53,20 @@ fi
 info "Installing minty to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$APPS_DIR"
 
-for f in mini_terminal.py minty_menu.py minty_theme.py minty_pkg.py minty_hist.py minty_tmux.py minty_vm.py minty_svc.py minty_proc.py minty_net.py minty.sh; do
-  if [ ! -f "$SOURCE_DIR/$f" ]; then
-    error "missing file next to installer: $SOURCE_DIR/$f"
+for f in "${FILES[@]}"; do
+  if [ -f "$SOURCE_DIR/$f" ]; then
+    install -m 755 "$SOURCE_DIR/$f" "$INSTALL_DIR/"
+  elif command -v curl >/dev/null 2>&1; then
+    info "Fetching $f from $MINTY_REPO..."
+    curl -fsSL -o "$INSTALL_DIR/$f" "$RAW_BASE/$f"
+    chmod 755 "$INSTALL_DIR/$f"
+  else
+    error "missing file next to installer: $SOURCE_DIR/$f (and no curl to fetch it from $RAW_BASE/$f)"
     exit 1
   fi
-  install -m 755 "$SOURCE_DIR/$f" "$INSTALL_DIR/"
 done
+
+install -m 755 "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
 
 if [ -f "$SOURCE_DIR/opencode" ]; then
   info "Bundling opencode ($(du -h "$SOURCE_DIR/opencode" | cut -f1))..."
@@ -110,4 +123,4 @@ info "Done!"
 echo "  - Open a NEW terminal window -> it should be minty."
 echo "  - Or run: $BIN_DIR/minty"
 echo "  - Side menu with OpenCode: press Ctrl+T inside minty."
-echo "  - To remove: bash $SOURCE_DIR/install.sh --uninstall"
+  echo "  - To remove: bash $INSTALL_DIR/install.sh --uninstall"
