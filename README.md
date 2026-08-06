@@ -1,16 +1,17 @@
 # minty
 
-A tiny shell that runs in your real terminal. Everything lives in one file:
-the shell, visual themes, a package manager, a tmux session manager, a VM
-manager, a systemd service manager, a process manager, a network/wifi manager
-and an fzf-style history picker.
+minty is its own terminal — a single file that brings the shell **and** a
+real GTK3/VTE terminal emulator, so it doesn't need kitty or any other
+terminal. It also packs visual themes, a package manager, a tmux session
+manager, a VM manager, a systemd service manager, a process manager, a
+network/wifi manager and an fzf-style history picker.
 
 ## Requirements
 
 - Python 3
-- A terminal emulator (kitty recommended, but any terminal works)
+- For the built-in minty terminal: `vte3` + python-gobject
+  (Arch: `sudo pacman -S vte3`)
 - OpenCode AI is bundled automatically on first run if not present
-- For the built-in minty terminal: `vte3` (Arch: `sudo pacman -S vte3`)
 
 ## Install
 
@@ -29,14 +30,15 @@ bash install.sh
 ```
 
 Both methods copy `minty.py` into `~/.local/share/minty`, create a `minty`
-command in `~/.local/bin`, add a desktop launcher, and (if kitty is installed)
-make minty the shell that kitty opens.
+command in `~/.local/bin` and add a desktop launcher. `minty` opens its own
+terminal window — no kitty required.
 
 ## Use
 
-- Run `minty` in a terminal, or open a new kitty window
-- `terminal` — open minty in its own terminal window (its own GTK3/VTE
-  terminal emulator, colours matched to your theme)
+- Launch the `minty terminal` desktop app, or run `minty terminal` in any
+  terminal — it opens its own GTK3/VTE window with colours matched to your
+  theme
+- Run `minty` in an existing terminal to start the minty shell there
 - `help` — list every built-in command
 - `theme` — browse, apply, edit and share themes
 - `pkg` — search / install / remove packages and update your system
