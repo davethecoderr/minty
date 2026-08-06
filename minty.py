@@ -86,6 +86,8 @@ DEFAULT_COLORS = {
     "bright_green": "1;32",
     "bright_magenta": "1;35",
     "bright_cyan": "1;36",
+    "background": "30",
+    "foreground": "37",
 }
 
 DEFAULT_PROMPT = {
@@ -105,6 +107,7 @@ DEFAULT_PROMPT = {
     "show_git": True,
     "show_status": True,
     "show_time": False,
+    "dir_max": 0,
 }
 
 # Colors the visual editor can tweak (reset/bold/dim stay as they are).
@@ -124,6 +127,8 @@ PROMPT_ROLE_ORDER = [
 DEFAULT_SETTINGS = {
     "show_banner": True,
     "show_hint": True,
+    "font": "",
+    "font_size": None,
 }
 
 DEFAULT_THEME = {
@@ -1007,8 +1012,13 @@ def detect_pm() -> dict | None:
             return {"kind": "aur", "pm": name}
     if shutil.which("pacman"):
         return {"kind": "pacman", "pm": "pacman"}
-    if shutil.which("apt"):
-        return {"kind": "apt", "pm": "apt"}
+    for name in ("apt", "apt-get"):
+        if shutil.which(name):
+            return {"kind": "apt", "pm": "apt" if name == "apt" else "apt-get"}
+    if shutil.which("dnf"):
+        return {"kind": "dnf", "pm": "dnf"}
+    if shutil.which("zypper"):
+        return {"kind": "zypper", "pm": "zypper"}
     return None
 
 
@@ -1017,7 +1027,7 @@ def _argv(pm: dict, *parts) -> list[str]:
 
 
 def _sudo(pm: dict, *parts) -> list[str]:
-    if pm["kind"] == "apt" or pm["pm"] in ("paru", "yay"):
+    if pm["kind"] in ("apt", "dnf", "zypper") or pm["pm"] in ("paru", "yay"):
         return _argv(pm, *parts)
     return ["sudo"] + _argv(pm, *parts)
 
@@ -1025,24 +1035,40 @@ def _sudo(pm: dict, *parts) -> list[str]:
 def search_cmd(pm, term):
     if pm["kind"] == "apt":
         return _argv(pm, "search", term)
+    if pm["kind"] == "dnf":
+        return _argv(pm, "search", term)
+    if pm["kind"] == "zypper":
+        return _argv(pm, "se", term)
     return _argv(pm, "-Ss", term)
 
 
 def install_cmd(pm, pkgs):
     if pm["kind"] == "apt":
         return _sudo(pm, "install", *pkgs)
+    if pm["kind"] == "dnf":
+        return _sudo(pm, "install", "-y", *pkgs)
+    if pm["kind"] == "zypper":
+        return _sudo(pm, "install", "-y", *pkgs)
     return _sudo(pm, "-S", "--needed", *pkgs)
 
 
 def remove_cmd(pm, pkgs):
     if pm["kind"] == "apt":
         return _sudo(pm, "remove", *pkgs)
+    if pm["kind"] == "dnf":
+        return _sudo(pm, "remove", "-y", *pkgs)
+    if pm["kind"] == "zypper":
+        return _sudo(pm, "remove", "-y", *pkgs)
     return _sudo(pm, "-Rns", *pkgs)
 
 
 def update_cmd(pm):
     if pm["kind"] == "apt":
         return ["sudo", "sh", "-c", "apt update && apt upgrade -y"]
+    if pm["kind"] == "dnf":
+        return ["sudo", "dnf", "upgrade", "-y"]
+    if pm["kind"] == "zypper":
+        return ["sudo", "zypper", "dup", "-y"]
     if pm["pm"] in ("paru", "yay"):
         return [pm["pm"], "-Syu", "--noconfirm"]
     return ["sudo", "pacman", "-Syu"]
@@ -1051,24 +1077,39 @@ def update_cmd(pm):
 def upgrades_cmd(pm):
     if pm["kind"] == "apt":
         return _argv(pm, "list", "--upgradable")
+    if pm["kind"] == "dnf":
+        return _argv(pm, "list", "--upgrades")
+    if pm["kind"] == "zypper":
+        return _argv(pm, "list-updates")
     return _argv(pm, "-Qu")
 
 
 def orphans_cmd(pm):
     if pm["kind"] == "apt":
         return ["sudo", "apt", "autoremove", "--dry-run"]
+    if pm["kind"] == "dnf":
+        return ["sudo", "dnf", "list", "autoremove"]
+    if pm["kind"] == "zypper":
+        return _argv(pm, "packages", "--orphaned")
     return _argv(pm, "-Qdt")
 
 
 def clean_cmd(pm):
     if pm["kind"] == "apt":
         return ["sudo", "apt", "autoremove", "-y"]
+    if pm["kind"] == "dnf":
+        return ["sudo", "dnf", "autoremove", "-y"]
+    if pm["kind"] == "zypper":
+        return ["sudo", "zypper", "packages", "--orphaned"]
     return _sudo(pm, "-Sc")
-
 
 
 def is_installed(pm: dict, name: str) -> bool:
     if pm["kind"] == "apt":
+        return False
+    if pm["kind"] == "dnf":
+        return False
+    if pm["kind"] == "zypper":
         return False
     code, _ = run_capture([pm["pm"], "-Q", name])
     return code == 0
@@ -1104,7 +1145,7 @@ def parse_pkg(output: str) -> list[dict]:
 def _pkg_cli(args):
     pm = detect_pm()
     if pm is None:
-        print("no supported package manager found (pacman, yay, paru, apt)", file=sys.stderr)
+        print("no supported package manager found (paru/yay, pacman, apt, dnf, zypper)", file=sys.stderr)
         return 1
     if not args or args[0] in ("app", "ui", "menu"):
         return 0 if _pkg_run_app() else 1
@@ -1366,10 +1407,11 @@ def _pkg_run_app() -> bool:
 
 MENU_ITEMS = [
     ("OpenCode AI", "opencode", "Launch the OpenCode AI assistant."),
+    ("OpenCode AI (new window)", "opencode_new", "Launch OpenCode in a fresh terminal window here."),
     ("Rerun last command", "rerun", "Rerun the last command you typed (!!)."),
     ("Learn code guide", "learn", "How-to snippets: files, editing, git, python, pipes and more."),
     ("Themes", "themes", "Browse, apply, edit and share minty themes."),
-    ("Packages", "packages", "Search, install and remove packages (pacman/yay/paru)."),
+    ("Packages", "packages", "Search, install and remove packages (pacman/yay/paru/apt/dnf/zypper)."),
     ("Update system", "system_update", "Full system update with your package manager."),
     ("Update minty", "update", "Update minty from a local path or github repo."),
     ("Install/update opencode", "install_opencode", "Download or update the bundled OpenCode AI."),
@@ -2859,6 +2901,14 @@ LEARN_TOPICS = [
             ("c", "sudo apt install package"),
             ("c", "apt search term"),
             ("c", "sudo apt update && sudo apt upgrade -y"),
+            ("t", "Fedora (dnf):"),
+            ("c", "sudo dnf install package"),
+            ("c", "dnf search term"),
+            ("c", "sudo dnf upgrade -y"),
+            ("t", "openSUSE (zypper):"),
+            ("c", "sudo zypper install package"),
+            ("c", "zypper se term"),
+            ("c", "sudo zypper dup -y"),
         ],
     },
     {
@@ -3352,7 +3402,7 @@ def cmd_tour(args):
 
 # ---- minty shell core ----
 
-VERSION = "4.4"
+VERSION = "4.5"
 HISTFILE = os.path.expanduser("~/.minty_history")
 MAXHIST = 2000
 HIST_SENTINEL = "__mintyhist__"
@@ -3376,6 +3426,7 @@ DEFAULT_ALIASES = {
     "cls": "clear",
     "..": "cd ..",
     "...": "cd ../..",
+    "oc": "opencode",
 }
 
 ALIASES = dict(DEFAULT_ALIASES)
@@ -3445,8 +3496,16 @@ def err(name: str, message: str) -> None:
     print(f"{B_RED}{name}{RESET}: {message}")
 
 
+_GIT_CACHE: dict[str, tuple[float, dict | None]] = {}
+GIT_CACHE_TTL = 1.5
+
+
 def git_info(path: str) -> dict | None:
     """Return {branch, dirty, ahead, behind} for the git repo at/above path."""
+    now = time.monotonic()
+    cached = _GIT_CACHE.get(path)
+    if cached and now - cached[0] < GIT_CACHE_TTL:
+        return cached[1]
     d = os.path.abspath(path)
     while True:
         if os.path.isdir(os.path.join(d, ".git")):
@@ -3474,7 +3533,9 @@ def git_info(path: str) -> dict | None:
             if mod:
                 behind = int(mod.group(1))
             dirty = len([l for l in proc.stdout.splitlines() if l and not l.startswith("##")]) > 0
-            return {"branch": branch, "dirty": dirty, "ahead": ahead, "behind": behind}
+            info = {"branch": branch, "dirty": dirty, "ahead": ahead, "behind": behind}
+            _GIT_CACHE[path] = (now, info)
+            return info
         parent = os.path.dirname(d)
         if parent == d:
             return None
@@ -3498,6 +3559,11 @@ def prompt() -> str:
     host = os.uname().nodename.split(".")[0]
     home = os.path.expanduser("~")
     shown = os.getcwd().replace(home, "~", 1)
+    dmax = int(pconf.get("dir_max", 0) or 0)
+    if dmax > 0:
+        parts = [p for p in shown.split("/") if p]
+        if len(parts) > dmax:
+            shown = "…/" + "/".join(parts[-dmax:])
     mark = "#" if os.geteuid() == 0 else "$"
     sep = str(pconf.get("separator", "@"))
     p = ""
@@ -4474,13 +4540,58 @@ def cmd_config(args):
     return code
 
 
+def _open_in_new_terminal(argv: list[str]) -> int | None:
+    """Launch argv in a fresh terminal window/tab at the current directory."""
+    cwd = os.getcwd()
+    env = dict(os.environ)
+    env.setdefault("MINTY_OC", "1")
+    if os.environ.get("KITTY_WINDOW_ID") and shutil.which("kitty"):
+        subprocess.Popen(
+            ["kitty", "@", "launch", "--type=window", "--cwd", cwd, "--"] + argv,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True, env=env)
+        return 0
+    kitty = shutil.which("kitty")
+    if kitty:
+        subprocess.Popen(
+            [kitty, "--directory", cwd, "--"] + argv,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True, env=env)
+        return 0
+    for term in ("gnome-terminal", "konsole", "xfce4-terminal", "x-terminal-emulator", "xterm"):
+        exe = shutil.which(term)
+        if not exe:
+            continue
+        try:
+            if term == "xterm":
+                cmd = [exe, "-e"] + argv
+            elif term == "konsole":
+                cmd = [exe, "--workdir", cwd, "-e"] + argv
+            else:
+                cmd = [exe, "--working-directory", cwd, "--"] + argv
+            subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+                             env=env)
+            return 0
+        except OSError:
+            continue
+    return None
+
+
 def cmd_opencode(args):
     exe = find_opencode()
     if not exe:
         if not ensure_opencode():
             return 1
         exe = find_opencode()
-    return run_proc([exe] + args)
+    argv = [exe] + args
+    if args and args[0] in ("--new", "-w"):
+        argv = [exe] + args[1:]
+        if _open_in_new_terminal(argv) is not None:
+            print(f"{GREEN}opencode opened in a new window.{RESET}")
+            return 0
+        err("opencode", "no usable terminal found — running here instead")
+    return run_proc(argv)
 
 
 def cmd_menu(args):
@@ -4489,6 +4600,8 @@ def cmd_menu(args):
         return 0
     if sel == "opencode":
         return cmd_opencode([])
+    if sel == "opencode_new":
+        return cmd_opencode(["--new"])
     if sel == "learn":
         return cmd_learn([])
     if sel == "fastfetch":
@@ -4739,8 +4852,28 @@ def _terminal_available() -> bool:
 
 
 def _terminal_deps_hint() -> str:
-    return "the minty terminal needs GTK3 + VTE.\n" \
-           "install with: sudo pacman -S vte3  (python-gobject is usually already present)"
+    """Suggest how to install the GTK3/VTE deps on this distro."""
+    hint = "the minty terminal needs GTK3 + VTE.\n"
+    os_id = ""
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if line.startswith("ID="):
+                    os_id = line.strip().split("=", 1)[1].strip('"')
+                    break
+    except OSError:
+        pass
+    if os_id in ("arch", "cachyos", "endeavouros", "manjaro"):
+        hint += "install with: sudo pacman -S vte3 python-gobject"
+    elif os_id in ("debian", "ubuntu", "linuxmint", "pop", "zorin", "elementary"):
+        hint += "install with: sudo apt install python3-gi gir1.2-vte-2.91"
+    elif os_id in ("fedora",):
+        hint += "install with: sudo dnf install vte291 python3-gobject"
+    elif os_id in ("opensuse", "suse", "opensuse-tumbleweed", "opensuse-leap"):
+        hint += "install with: sudo zypper install vte python3-gobject"
+    else:
+        hint += "install python-gobject + VTE (2.91) for your distribution"
+    return hint
 
 
 def _rgba(r: int, g: int, b: int):
@@ -4769,29 +4902,32 @@ def _terminal_palette(theme: Theme) -> list:
         return _rgba(*color_rgb(c.get(key, fallback)))
 
     return [
-        _rgba(*ANSI_TO_RGB[30]),                       # 0  black
-        col("red", "31"),                              # 1  red
-        col("green", "32"),                            # 2  green
-        col("yellow", "33"),                           # 3  yellow
-        col("blue", "34"),                             # 4  blue
-        col("magenta", "35"),                          # 5  magenta
-        col("cyan", "36"),                             # 6  cyan
-        _rgba(*ANSI_TO_RGB[37]),                       # 7  white
-        _rgba(*ANSI_TO_RGB[90]),                       # 8  bright black
-        col("bright_red", "91"),                       # 9  bright red
-        col("bright_green", "92"),                     # 10 bright green
-        _rgba(*ANSI_TO_RGB[93]),                       # 11 bright yellow
-        _rgba(*ANSI_TO_RGB[94]),                       # 12 bright blue
-        col("bright_magenta", "95"),                   # 13 bright magenta
-        col("bright_cyan", "96"),                      # 14 bright cyan
-        _rgba(*ANSI_TO_RGB[97]),                       # 15 bright white
+        col("background", "30"),                     # 0  black / theme background
+        col("red", "31"),                            # 1  red
+        col("green", "32"),                          # 2  green
+        col("yellow", "33"),                         # 3  yellow
+        col("blue", "34"),                           # 4  blue
+        col("magenta", "35"),                        # 5  magenta
+        col("cyan", "36"),                           # 6  cyan
+        col("foreground", "37"),                     # 7  white / theme foreground
+        _rgba(*ANSI_TO_RGB[90]),                     # 8  bright black
+        col("bright_red", "91"),                     # 9  bright red
+        col("bright_green", "92"),                   # 10 bright green
+        _rgba(*ANSI_TO_RGB[93]),                     # 11 bright yellow
+        _rgba(*ANSI_TO_RGB[94]),                     # 12 bright blue
+        col("bright_magenta", "95"),                 # 13 bright magenta
+        col("bright_cyan", "96"),                    # 14 bright cyan
+        _rgba(*ANSI_TO_RGB[97]),                     # 15 bright white
     ]
 
 
 def _terminal_font(size=None) -> str:
     s = settings()
     size = size or int(s.get("terminal_font_size", 13))
-    return "%s %s" % (s.get("terminal_font", "monospace"), int(size))
+    family = s.get("terminal_font")
+    if not family:
+        family = load_theme(ACTIVE_THEME).settings.get("font") or "monospace"
+    return "%s %s" % (family, int(size))
 
 
 def _spawn_detached() -> None:
@@ -4883,9 +5019,11 @@ class MintyTerm:
         self.s = s
         self.tabs: list = []
         self.term_index: dict = {}
-        self.font_size = int(s.get("terminal_font_size", 13))
-        self.bg = _parse_hex(s.get("terminal_bg"), (10, 12, 16))
-        self.fg = _parse_hex(s.get("terminal_fg"), (229, 229, 229))
+        self.font_size = int(s.get("terminal_font_size") or theme.settings.get("font_size") or 13)
+        self.bg = _parse_hex(s.get("terminal_bg"),
+                             _parse_hex(theme.colors.get("background", ""), (10, 12, 16)))
+        self.fg = _parse_hex(s.get("terminal_fg"),
+                             _parse_hex(theme.colors.get("foreground", ""), (229, 229, 229)))
 
         self.window = Gtk.Window()
         self.window.set_title("minty")
@@ -4934,7 +5072,7 @@ class MintyTerm:
                 )
         except TypeError:
             err("terminal", "this VTE version changed its spawn API; "
-                            "upgrade with: sudo pacman -S vte3")
+                            "upgrade VTE for your distribution")
             return False
         ok = result[0] if isinstance(result, tuple) else result
         return bool(ok)
@@ -5439,7 +5577,7 @@ COMMANDS = {
     "trash": ("Move files to the trash instead of deleting", cmd_trash),
     "hist": ("Browse command history (like Ctrl+R)", cmd_hist),
     "config": ("Open the persistent minty config in your editor", cmd_config),
-    "opencode": ("Start the OpenCode AI assistant (bundled)", cmd_opencode),
+    "opencode": ("Start the OpenCode AI assistant (--new opens a fresh window)", cmd_opencode),
     "learn": ("Open the code guide with how-to snippets", cmd_learn),
     "settings": ("Open the visual settings editor (settings get/set <key> <value>)", cmd_settings),
     "tour": ("Replay the first-run minty walkthrough", cmd_tour),
@@ -5587,7 +5725,7 @@ def _not_found(name: str, parts: list[str]) -> int:
     if sugg:
         print(f"{DIM}did you mean:{RESET}  " + "  ".join(f"{BOLD}{s}{RESET}" for s in sugg))
     elif (sys.stdin.isatty()
-          and any(shutil.which(p) for p in ("paru", "yay", "pacman", "apt"))
+          and any(shutil.which(p) for p in ("paru", "yay", "pacman", "apt", "dnf", "zypper"))
           and settings().get("suggest_install", True)):
         try:
             resp = input(f"install '{name}' with your package manager? [y/N] ")
@@ -5739,7 +5877,7 @@ def main():
         print(banner())
     print(f"{BOLD}minty v{VERSION}{RESET} — type 'help' for commands, 'exit' to quit.  {DIM}(theme: {ACTIVE_THEME}){RESET}")
     if theme.settings.get("show_hint", True):
-        print(f"{DIM}Ctrl+T menu · Ctrl+R history · !! rerun · z jump · learn · tmux vms svc proc net{RESET}")
+        print(f"{DIM}Ctrl+T menu · Ctrl+R history · !! rerun · z jump · oc (opencode) · learn · tmux vms svc proc net{RESET}")
 
     global LAST_DURATION
     while True:
