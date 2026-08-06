@@ -4,7 +4,8 @@
 Single file, everything built in: the shell, visual themes, a package
 manager (pacman/paru/yay, apt, dnf, zypper), a tmux session manager, a VM
 manager, a systemd service manager, a process manager, a network/wifi
-manager, an fzf-style history picker, deep OpenCode AI integration
+manager, an fzf-style history picker, a virus detector ('vscan', with an
+optional ClamAV deep scan), deep OpenCode AI integration
 ('oc' / opencode, --new opens a fresh window) and its own GTK3/VTE
 terminal emulator ('minty terminal') that tracks the cwd via OSC 7 and
 inherits colors, palette and font from the active theme.
@@ -131,6 +132,7 @@ DEFAULT_SETTINGS = {
     "show_banner": True,
     "show_hint": True,
     "show_fetch": False,
+    "paypal_url": "",
     "font": "",
     "font_size": None,
 }
@@ -1429,6 +1431,8 @@ MENU_ITEMS = [
     ("Processes", "proc", "Kill processes or open btop/htop."),
     ("Network", "net", "Join wifi and manage connections."),
     ("Settings", "settings", "Visual editor for minty's terminal settings."),
+    ("Security scan", "vscan", "Scan for viruses, crypto miners and suspicious startup entries."),
+    ("Support minty (donate)", "donate", "Open your PayPal link to support minty."),
     ("First-run tour", "tour", "Replay the quick minty walkthrough."),
     ("Edit minty config", "config", "Open minty's persistent config in your editor."),
     ("minty version", "version", "Show which version of minty is running."),
@@ -3129,6 +3133,7 @@ SETTINGS_SPEC = [
     ("notify_threshold", "float", "Notify after a command runs this long", "5.0"),
     ("duration_threshold", "float", "Show duration after a command runs this long", "3.0"),
     ("show_fetch", "bool", "Show system info (fastfetch) on startup", "False"),
+    ("paypal_url", "str", "Your PayPal link — 'donate' opens it", ""),
     ("suggest_install", "bool", "Suggest installing unknown commands", "True"),
 ]
 
@@ -3408,7 +3413,7 @@ def cmd_tour(args):
 
 # ---- minty shell core ----
 
-VERSION = "4.7"
+VERSION = "4.8"
 HISTFILE = os.path.expanduser("~/.minty_history")
 MAXHIST = 2000
 HIST_SENTINEL = "__mintyhist__"
@@ -4641,6 +4646,167 @@ def cmd_neofetch(args):
     return _ensure_tool("neofetch")
 
 
+def cmd_donate(args):
+    url = settings().get("paypal_url", "") or ""
+    if not url or "yourname" in url:
+        print(f"{YELLOW}No PayPal link set yet.{RESET}")
+        print(f"{DIM}Set it with: settings set paypal_url \"https://www.paypal.me/yourname\"{RESET}")
+        print(f"{DIM}Create your link at paypal.me — sign in and pick a username (or use your normal{RESET}")
+        print(f"{DIM}PayPal URL from Settings > Account). It becomes a short paypal.me link you can share.{RESET}")
+        return 1
+    print(f"{BOLD}minty is free and open source{RESET} — if it's useful, a coffee is appreciated:")
+    print(f"{BLUE}{url}{RESET}")
+    opener = "open" if sys.platform == "darwin" else shutil.which("xdg-open")
+    if opener:
+        try:
+            subprocess.Popen([opener, url], start_new_session=True)
+            return 0
+        except OSError as e:
+            err("donate", str(e))
+            return 1
+    print(f"{DIM}No browser launcher found — open the link above manually.{RESET}")
+    return 0
+
+
+VMINER_PROCS = ("xmrig", "minergate", "cpuminer", "kdevtmpfsi", "kinsing",
+                "systemct1", "systmd", "networkmanagerd", "zmq")
+VMINER_PORTS = {"3333", "4444", "5555", "7777", "14444", "33333", "45560", "45590", "9999", "18083"}
+SUSPICIOUS_BINARIES = ("xmrig", "kdevtmpfsi", "kinsing", "systemct1", "systmd",
+                       "libsystem.so", "kworkerds", "donate")
+BAD_RC_PATTERNS = (r"curl .*\| *(ba)?sh", r"wget .*\| *(ba)?sh", r"nc (-e|-l)",
+                   r"/dev/tcp/", r"base64 -d", r"eval \$\(")
+AUTOSTART_BAD = (r"curl", r"wget", r"/dev/tcp/", r"nc -e", r"base64 -d")
+
+
+def _scan_processes() -> list[str]:
+    finds = []
+    try:
+        proc = subprocess.run(["ss", "-tlnp"], capture_output=True, text=True, timeout=5)
+        for line in proc.stdout.splitlines():
+            m = re.search(r"(?:0\.0\.0\.0|\[::\]):(\d+)", line)
+            if m and m.group(1) in VMINER_PORTS:
+                finds.append(f"listener on known miner/backdoor port {m.group(1)}: {line.strip()}")
+    except Exception:
+        pass
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/comm") as f:
+                comm = f.read().strip().lower()
+            if comm in VMINER_PROCS:
+                try:
+                    with open(f"/proc/{name}/cmdline") as f:
+                        cmdline = f.read().replace("\x00", " ").strip()
+                except Exception:
+                    cmdline = ""
+                finds.append(f"process {name} ({comm}) running: {cmdline[:120]}")
+        except Exception:
+            continue
+    return finds
+
+
+def _scan_files() -> list[str]:
+    finds = []
+    home = os.path.expanduser("~")
+    for rc in (os.path.join(home, ".bashrc"), os.path.join(home, ".zshrc"),
+               os.path.join(home, ".profile"), os.path.join(home, ".config/fish/config.fish")):
+        if not os.path.isfile(rc):
+            continue
+        try:
+            text = open(rc, errors="ignore").read()
+        except Exception:
+            continue
+        for pat in BAD_RC_PATTERNS:
+            if re.search(pat, text):
+                finds.append(f"{rc} contains remote-exec pattern '{pat}'")
+                break
+    autodir = os.path.join(home, ".config", "autostart")
+    if os.path.isdir(autodir):
+        for fn in os.listdir(autodir):
+            if not fn.endswith(".desktop"):
+                continue
+            try:
+                text = open(os.path.join(autodir, fn), errors="ignore").read()
+            except Exception:
+                continue
+            for pat in AUTOSTART_BAD:
+                if re.search(pat, text):
+                    finds.append(f"autostart entry {fn} contains '{pat}'")
+                    break
+    try:
+        cr = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=5)
+        for line in cr.stdout.splitlines():
+            if re.search(r"curl|wget|/dev/tcp/|nc -e", line):
+                finds.append(f"crontab line: {line.strip()}")
+    except Exception:
+        pass
+    seen = set()
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d or d in seen:
+            continue
+        seen.add(d)
+        if not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            if name.lower() in SUSPICIOUS_BINARIES:
+                p = os.path.join(d, name)
+                if os.path.isfile(p):
+                    finds.append(f"suspicious binary in PATH: {p}")
+    for d in (os.path.join(home, ".local/bin"), os.path.join(home, "bin"), os.path.join(home, ".config")):
+        if not os.path.isdir(d):
+            continue
+        for root, dirs, files in os.walk(d):
+            dirs[:] = [x for x in dirs if x not in ("__pycache__", ".git")]
+            for fn in files:
+                p = os.path.join(root, fn)
+                try:
+                    st = os.stat(p)
+                    if st.st_uid == os.getuid() and (st.st_mode & 0o4000):
+                        finds.append(f"setuid file in home: {p}")
+                except Exception:
+                    pass
+    return finds
+
+
+def _scan_clamav() -> list[str]:
+    clamscan = shutil.which("clamscan")
+    if not clamscan:
+        print(f"{YELLOW}clamav not installed — run: pkg install clamav{RESET}")
+        return []
+    home = os.path.expanduser("~")
+    print(f"{DIM}clamscan of {home} (this can take a while)...{RESET}")
+    try:
+        proc = subprocess.run([clamscan, "--recursive", "--quiet", "--infected",
+                               "--exclude-dir", r"^\.cache", home],
+                              capture_output=True, text=True, timeout=1800)
+        out = proc.stdout + "\n" + proc.stderr
+        return [l for l in out.splitlines() if "FOUND" in l.upper()] or ["clamscan found nothing infected"]
+    except subprocess.TimeoutExpired:
+        return ["clamscan timed out"]
+
+
+def cmd_vscan(args):
+    if args and args[0] in ("-h", "--help"):
+        print("vscan — scan for crypto miners, backdoors and suspicious startup entries")
+        print("  vscan          quick scan (no root needed)")
+        print("  vscan deep     full file scan with clamav (installs if missing)")
+        return 0
+    print(f"{BOLD}Running security scan...{RESET}")
+    finds = _scan_processes() + _scan_files()
+    if args and args[0] == "deep":
+        finds += _scan_clamav()
+    if not finds:
+        print(f"{GREEN}✓ no threats found{RESET}")
+        print(f"{DIM}scanned processes, listening ports, startup entries, cron and autostart{RESET}")
+        return 0
+    print(f"{RED}{len(finds)} potential issue(s) found:{RESET}")
+    for f in finds:
+        print(f"  {YELLOW}!{RESET} {f}")
+    print(f"{DIM}Review the items above — nothing was deleted automatically.{RESET}")
+    return 1
+
+
 def cmd_menu(args):
     sel = _menu_picker()
     if sel in ("close", ""):
@@ -4655,6 +4821,10 @@ def cmd_menu(args):
         return cmd_fastfetch([])
     if sel == "neofetch":
         return cmd_neofetch([])
+    if sel == "vscan":
+        return cmd_vscan([])
+    if sel == "donate":
+        return cmd_donate([])
     if sel == "config":
         return cmd_config([])
     if sel == "hist":
@@ -5643,6 +5813,9 @@ COMMANDS = {
     "opencode": ("Start the OpenCode AI assistant (--new opens a fresh window)", cmd_opencode),
     "fastfetch": ("Show system info with fastfetch (installs if missing)", cmd_fastfetch),
     "neofetch": ("Show system info with neofetch (installs if missing)", cmd_neofetch),
+    "vscan": ("Scan for viruses, crypto miners and suspicious startup entries (vscan deep = clamav)", cmd_vscan),
+    "security": ("Scan for viruses, crypto miners and suspicious startup entries", cmd_vscan),
+    "donate": ("Open your PayPal link to support minty", cmd_donate),
     "learn": ("Open the code guide with how-to snippets", cmd_learn),
     "settings": ("Open the visual settings editor (settings get/set <key> <value>)", cmd_settings),
     "tour": ("Replay the first-run minty walkthrough", cmd_tour),

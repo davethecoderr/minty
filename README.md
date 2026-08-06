@@ -81,6 +81,11 @@ font from your active minty theme.
 - `fastfetch` / `neofetch` — show system info (if either isn't installed,
   minty offers to install it with your package manager); set
   `settings set show_fetch true` to show it on every startup
+- `vscan` (or `security`) — virus detector: scans running processes,
+  listening ports, cron, autostart entries and shell rc files for crypto
+  miners, backdoors and suspicious startup entries; `vscan deep` runs a
+  full ClamAV scan (installs it for you if missing)
+- `donate` — opens your PayPal link (`settings set paypal_url <link>`)
 - `tmux`, `vms`, `svc`, `proc`, `net` — visual managers for each
 - `hist` or `Ctrl+R` — browse command history
 - `Ctrl+T` — side menu
