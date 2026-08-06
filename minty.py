@@ -3060,7 +3060,7 @@ def cmd_learn(args):
 
 # ---- minty shell core ----
 
-VERSION = "4.2"
+VERSION = "4.3"
 HISTFILE = os.path.expanduser("~/.minty_history")
 MAXHIST = 2000
 HIST_SENTINEL = "__mintyhist__"
@@ -4008,6 +4008,45 @@ def cmd_which(args):
     return 0
 
 
+def cmd_open(args):
+    """Open files/folders with the system default app (xdg-open)."""
+    if not args:
+        err("open", "usage: open <file|folder|url>")
+        return 1
+    for target in args:
+        path = os.path.expanduser(target)
+        if not os.path.exists(path) and not re.match(r"^[a-z]+://", target):
+            err("open", f"no such file: {target}")
+            return 1
+        opener = shutil.which("xdg-open")
+        if not opener:
+            err("open", "xdg-open is not installed")
+            return 1
+        run_interactive([opener, path])
+    return 0
+
+
+def cmd_clip(args):
+    """Copy text to the clipboard."""
+    if not args:
+        return 0
+    text = " ".join(args)
+    for tool, argv in (("wl-copy", ["wl-copy", "--type", "text/plain"]),
+                       ("xclip", ["xclip", "-selection", "clipboard"]),
+                       ("xsel", ["xsel", "--clipboard", "--input"])):
+        if shutil.which(tool):
+            try:
+                proc = subprocess.run(argv, input=text, text=True)
+                if proc.returncode == 0:
+                    print(f"{DIM}copied {len(text)} char(s) to the clipboard{RESET}")
+                    return 0
+            except OSError:
+                pass
+            break
+    err("clip", "no clipboard tool found (install wl-clipboard or xclip)")
+    return 1
+
+
 def cmd_env(args):
     for k in sorted(os.environ):
         print(f"{k}={os.environ[k]}")
@@ -4471,14 +4510,200 @@ def _spawn_detached() -> None:
         os.close(devnull)
 
 
-def _bind_terminal_keys(term, window) -> None:
-    from gi.repository import Gdk, Gtk, Pango
+def _uri_to_path(uri: str, GLib) -> str | None:
+    try:
+        return GLib.filename_from_uri(uri)[0]
+    except Exception:
+        return None
 
-    def on_key(widget, event, window):
-        key = Gdk.keyval_name(event.keyval) or ""
+
+class MintyTerm:
+    """The minty terminal window: GTK3 + VTE with tabs."""
+
+    def __init__(self, Gtk, GLib, Gdk, Pango, Vte, theme, s, cwd=None):
+        self.Gtk, self.GLib = Gtk, GLib
+        self.Gdk, self.Pango, self.Vte = Gdk, Pango, Vte
+        self.theme = theme
+        self.s = s
+        self.terms: list = []
+        self.cwds: list = []
+        self.font_size = int(s.get("terminal_font_size", 13))
+        self.bg = _parse_hex(s.get("terminal_bg"), (10, 12, 16))
+        self.fg = _parse_hex(s.get("terminal_fg"), (229, 229, 229))
+
+        self.window = Gtk.Window()
+        self.window.set_title("minty")
+        self.window.set_default_size(int(s.get("terminal_width", 980)),
+                                     int(s.get("terminal_height", 620)))
+        self.window.set_icon_name("utilities-terminal")
+
+        self.notebook = Gtk.Notebook()
+        self.notebook.set_scrollable(True)
+        self.notebook.set_show_border(False)
+        self.window.add(self.notebook)
+
+        plus = Gtk.Button(label="+")
+        plus.set_relief(Gtk.ReliefStyle.NONE)
+        plus.set_focus_on_click(False)
+        plus.set_tooltip_text("New tab (Ctrl+Shift+T)")
+        plus.connect("clicked", lambda *a: self.new_tab(self.current_cwd()))
+        self.notebook.set_action_widget(plus, Gtk.PackType.END)
+        plus.show()
+
+        self.window.connect("key-press-event", self._window_key)
+        self.window.connect("destroy", lambda *a: Gtk.main_quit())
+
+        self.new_tab(cwd)
+
+    def _rgba(self, r, g, b):
+        return self.Gdk.RGBA(max(0, min(255, r)) / 255.0,
+                             max(0, min(255, g)) / 255.0,
+                             max(0, min(255, b)) / 255.0, 1.0)
+
+    def _spawn_in_term(self, term, cwd):
+        envv = dict(os.environ)
+        envv.setdefault("TERM", "xterm-256color")
+        argv = [sys.executable, os.path.realpath(__file__)]
+        try:
+            import warnings as _w
+            with _w.catch_warnings():
+                _w.simplefilter("ignore", DeprecationWarning)
+                result = term.spawn_sync(
+                    self.Vte.PtyFlags.DEFAULT,
+                    cwd or os.getcwd(),
+                    argv,
+                    ["%s=%s" % (k, v) for k, v in envv.items()],
+                    self.GLib.SpawnFlags.DEFAULT,
+                    None, None, None,
+                )
+        except TypeError:
+            err("terminal", "this VTE version changed its spawn API; "
+                            "upgrade with: sudo pacman -S vte3")
+            return False
+        ok = result[0] if isinstance(result, tuple) else result
+        return bool(ok)
+
+    def new_tab(self, cwd=None):
+        term = self.Vte.Terminal()
+        term.set_scrollback_lines(int(self.s.get("terminal_scrollback", 10000)))
+        term.set_cursor_blink_mode(self.Vte.CursorBlinkMode.ON)
+        term.set_mouse_autohide(True)
+        term.set_font(self.Pango.FontDescription.from_string(_terminal_font(self.font_size)))
+        term.set_colors(self._rgba(*self.fg), self._rgba(*self.bg),
+                        _terminal_palette(self.theme))
+        term.connect("key-press-event", self._term_key)
+        term.connect("child-exited", self._child_exited)
+        term.connect("window-title-changed", self._title_changed)
+        term.connect("current-directory-uri-changed", self._dir_changed)
+        if not self._spawn_in_term(term, cwd):
+            err("terminal", "failed to start minty inside the terminal")
+            return None
+        scrolled = self.Gtk.ScrolledWindow()
+        scrolled.set_policy(self.Gtk.PolicyType.AUTOMATIC, self.Gtk.PolicyType.NEVER)
+        scrolled.add(term)
+        scrolled.show()
+        label = self.Gtk.Label(label="minty")
+        label.show()
+        idx = self.notebook.append_page(scrolled, label)
+        self.notebook.set_current_page(idx)
+        self.terms.append(term)
+        self.cwds.append(None)
+        return term
+
+    def _index_of(self, term):
+        for i, t in enumerate(self.terms):
+            if t is term:
+                return i
+        return None
+
+    def _dir_changed(self, term, *a):
+        idx = self._index_of(term)
+        if idx is None:
+            return
+        try:
+            uri = term.get_current_directory_uri()
+        except Exception:
+            uri = None
+        if uri and idx < len(self.cwds):
+            self.cwds[idx] = _uri_to_path(uri, self.GLib)
+
+    def _title_changed(self, term, *a):
+        idx = self._index_of(term)
+        if idx is None:
+            return
+        try:
+            title = term.get_window_title() or "minty"
+        except Exception:
+            title = "minty"
+        tab = self.notebook.get_nth_page(idx)
+        if tab is not None:
+            label = self.notebook.get_tab_label(tab)
+            if label is not None and hasattr(label, "set_text"):
+                label.set_text(title)
+        if self.notebook.get_current_page() == idx:
+            self.window.set_title(title)
+
+    def _child_exited(self, term, *a):
+        idx = self._index_of(term)
+        if idx is not None:
+            self.GLib.idle_add(self._close_tab, idx, True)
+
+    def _close_tab(self, idx, force=True):
+        if not (0 <= idx < len(self.terms)):
+            return False
+        term = self.terms.pop(idx)
+        self.notebook.remove_page(idx)
+        if idx < len(self.cwds):
+            self.cwds.pop(idx)
+        try:
+            term.destroy()
+        except Exception:
+            pass
+        if not self.terms:
+            self.Gtk.main_quit()
+        return True
+
+    def current_cwd(self):
+        idx = self.notebook.get_current_page()
+        if 0 <= idx < len(self.cwds) and self.cwds[idx]:
+            return self.cwds[idx]
+        return None
+
+    def set_font_size(self, size):
+        self.font_size = size
+        self.s["terminal_font_size"] = size
+        for term in self.terms:
+            term.set_font(self.Pango.FontDescription.from_string(_terminal_font(size)))
+
+    def next_tab(self, delta):
+        n = self.notebook.get_n_pages()
+        if n < 2:
+            return
+        cur = self.notebook.get_current_page()
+        self.notebook.set_current_page((cur + delta) % n)
+
+    def _window_key(self, widget, event, *a):
+        key = self.Gdk.keyval_name(event.keyval) or ""
         mods = event.state
-        ctrl = bool(mods & Gdk.ModifierType.CONTROL_MASK)
-        shift = bool(mods & Gdk.ModifierType.SHIFT_MASK)
+        ctrl = bool(mods & self.Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(mods & self.Gdk.ModifierType.SHIFT_MASK)
+        if ctrl and key == "Page_Down":
+            self.next_tab(1)
+            return True
+        if ctrl and key == "Page_Up":
+            self.next_tab(-1)
+            return True
+        if ctrl and key == "Tab":
+            self.next_tab(-1 if shift else 1)
+            return True
+        return False
+
+    def _term_key(self, widget, event, *a):
+        key = self.Gdk.keyval_name(event.keyval) or ""
+        mods = event.state
+        ctrl = bool(mods & self.Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(mods & self.Gdk.ModifierType.SHIFT_MASK)
+        term = widget
         if ctrl and shift:
             if key in ("C", "c"):
                 term.copy_clipboard()
@@ -4486,31 +4711,36 @@ def _bind_terminal_keys(term, window) -> None:
             if key in ("V", "v"):
                 term.paste_clipboard()
                 return True
+            if key in ("T", "t"):
+                self.new_tab(self.current_cwd())
+                return True
+            if key in ("W", "w"):
+                idx = self._index_of(term)
+                if idx is not None:
+                    self.GLib.idle_add(self._close_tab, idx, True)
+                return True
             if key in ("N", "n"):
                 _spawn_detached()
                 return True
             if key in ("Q", "q"):
-                Gtk.main_quit()
+                self.Gtk.main_quit()
                 return True
         elif ctrl:
-            s = settings()
             if key in ("plus", "equal", "KP_Add"):
-                size = min(40, int(s.get("terminal_font_size", 13)) + 1)
-                s["terminal_font_size"] = size
-                term.set_font(Pango.FontDescription.from_string(_terminal_font(size)))
+                self.set_font_size(min(40, self.font_size + 1))
                 return True
             if key == "minus":
-                size = max(6, int(s.get("terminal_font_size", 13)) - 1)
-                s["terminal_font_size"] = size
-                term.set_font(Pango.FontDescription.from_string(_terminal_font(size)))
+                self.set_font_size(max(6, self.font_size - 1))
                 return True
             if key == "0":
-                size = int(s.get("terminal_font_size", 13))
-                term.set_font(Pango.FontDescription.from_string(_terminal_font(size)))
+                self.set_font_size(int(self.s.get("terminal_font_size", 13)))
                 return True
+            if key in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+                n = int(key)
+                if n <= self.notebook.get_n_pages():
+                    self.notebook.set_current_page(n - 1)
+                    return True
         return False
-
-    term.connect("key-press-event", on_key, window)
 
 
 def run_terminal_gui(cwd: str | None = None) -> int:
@@ -4527,59 +4757,8 @@ def run_terminal_gui(cwd: str | None = None) -> int:
     theme = load_theme(ACTIVE_THEME)
     s = settings()
 
-    window = Gtk.Window()
-    window.set_title("minty")
-    window.set_default_size(int(s.get("terminal_width", 980)),
-                            int(s.get("terminal_height", 620)))
-    window.set_icon_name("utilities-terminal")
-
-    term = Vte.Terminal()
-    term.set_scrollback_lines(int(s.get("terminal_scrollback", 10000)))
-    term.set_cursor_blink_mode(Vte.CursorBlinkMode.ON)
-    term.set_mouse_autohide(True)
-    term.set_font(Pango.FontDescription.from_string(_terminal_font()))
-    bg = _parse_hex(s.get("terminal_bg"), (10, 12, 16))
-    fg = _parse_hex(s.get("terminal_fg"), (229, 229, 229))
-    term.set_colors(_rgba(*fg), _rgba(*bg), _terminal_palette(theme))
-
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-    scrolled.add(term)
-    window.add(scrolled)
-
-    term.connect("window-title-changed",
-                 lambda t, *a: window.set_title(t or "minty"))
-    term.connect("child-exited", lambda *a: Gtk.main_quit())
-    window.connect("destroy", lambda *a: Gtk.main_quit())
-    _bind_terminal_keys(term, window)
-
-    envv = dict(os.environ)
-    envv.setdefault("TERM", "xterm-256color")
-    argv = [sys.executable, os.path.realpath(__file__)]
-    try:
-        import warnings as _w
-        with _w.catch_warnings():
-            _w.simplefilter("ignore", DeprecationWarning)
-            result = term.spawn_sync(
-                Vte.PtyFlags.DEFAULT,
-                cwd or os.getcwd(),
-                argv,
-                ["%s=%s" % (k, v) for k, v in envv.items()],
-                GLib.SpawnFlags.DEFAULT,
-                None,
-                None,
-                None,
-            )
-    except TypeError:
-        err("terminal", "this VTE version changed its spawn API; "
-                        "upgrade with: sudo pacman -S vte3")
-        return 1
-    ok = result[0] if isinstance(result, tuple) else result
-    if not ok:
-        err("terminal", "failed to start minty inside the terminal")
-        return 1
-
-    window.show_all()
+    app = MintyTerm(Gtk, GLib, Gdk, Pango, Vte, theme, s, cwd)
+    app.window.show_all()
     Gtk.main()
     return 0
 
@@ -4651,6 +4830,8 @@ COMMANDS = {
     "uname": ("Show system information", cmd_uname),
     "history": ("Show command history (-c clears)", cmd_history),
     "which": ("Show where a program is installed", cmd_which),
+    "open": ("Open files/folders with the default app", cmd_open),
+    "clip": ("Copy text to the clipboard", cmd_clip),
     "env": ("Show all environment variables", cmd_env),
     "export": ("Set an environment variable", cmd_export),
     "alias": ("List or create aliases", cmd_alias),
