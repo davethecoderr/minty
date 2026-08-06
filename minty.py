@@ -1367,6 +1367,7 @@ def _pkg_run_app() -> bool:
 MENU_ITEMS = [
     ("OpenCode AI", "opencode", "Launch the OpenCode AI assistant."),
     ("Rerun last command", "rerun", "Rerun the last command you typed (!!)."),
+    ("Learn code guide", "learn", "How-to snippets: files, editing, git, python, pipes and more."),
     ("Themes", "themes", "Browse, apply, edit and share minty themes."),
     ("Packages", "packages", "Search, install and remove packages (pacman/yay/paru)."),
     ("Update system", "system_update", "Full system update with your package manager."),
@@ -2606,9 +2607,460 @@ def _net_run_app() -> bool:
         return False
     return True
 
+# ---- learn: built-in code guide (minty_learn.py) ----
+
+LEARN_TOPICS = [
+    {
+        "title": "Create a file",
+        "desc": "Make new files fast, from empty to full of text.",
+        "lines": [
+            ("h", "Create an empty file"),
+            ("c", "touch notes.txt"),
+            ("t", "Write a line into a file (creates it if missing):"),
+            ("c", 'echo "hello world" > notes.txt'),
+            ("t", "Add more lines without overwriting (>> appends):"),
+            ("c", 'echo "another line" >> notes.txt'),
+            ("t", "Type content directly, then press Ctrl+D to save:"),
+            ("c", "cat > notes.txt"),
+            ("t", "Multi-line content without opening an editor (here-doc):"),
+            ("c", "cat > notes.txt <<EOF"),
+            ("c", "line one"),
+            ("c", "line two"),
+            ("c", "EOF"),
+            ("t", "Copy an existing file to make a new one:"),
+            ("c", "cp config.txt config.bak"),
+            ("b", ">  overwrites    >>  appends    <<EOF  here-doc"),
+        ],
+    },
+    {
+        "title": "Edit a file",
+        "desc": "Open files in editors and tweak them from the terminal.",
+        "lines": [
+            ("h", "Easy editors"),
+            ("c", "nano notes.txt"),
+            ("t", "nano is beginner friendly. Ctrl+O saves, Ctrl+X quits."),
+            ("c", "micro notes.txt"),
+            ("t", "micro feels like a modern editor with mouse + arrow keys."),
+            ("h", "vim"),
+            ("c", "vim notes.txt"),
+            ("t", "vim: press i to insert, Esc to stop typing, :wq to save & quit, :q! to quit without saving."),
+            ("t", "In-place edits without opening an editor:"),
+            ("c", "sed -i 's/old/new/g' notes.txt"),
+            ("c", "sed -i '/delete this line/d' notes.txt"),
+            ("t", "Open in a GUI editor (if installed):"),
+            ("c", "code notes.txt"),
+            ("b", "Use 'sudoedit file' (not 'sudo nano') to edit root-owned files safely."),
+        ],
+    },
+    {
+        "title": "View a file",
+        "desc": "Read files without an editor.",
+        "lines": [
+            ("c", "cat notes.txt"),
+            ("t", "Scroll through a big file with less (arrows scroll, q quits):"),
+            ("c", "less notes.txt"),
+            ("t", "First / last lines: "),
+            ("c", "head notes.txt"),
+            ("c", "tail notes.txt"),
+            ("c", "tail -f server.log"),
+            ("t", "tail -f follows a log while it grows. Ctrl+C stops it."),
+            ("t", "Line numbers and matching lines:"),
+            ("c", "cat -n notes.txt"),
+            ("c", "grep -n 'todo' notes.txt"),
+            ("t", "Count lines, words and bytes:"),
+            ("c", "wc notes.txt"),
+        ],
+    },
+    {
+        "title": "Files & folders",
+        "desc": "The everyday file commands.",
+        "lines": [
+            ("c", "ls -l -h"),
+            ("t", "-l long list, -a show hidden, -h human sizes, -t by time, -r reverse"),
+            ("t", "Make folders, including parents at once:"),
+            ("c", "mkdir -p projects/website/src"),
+            ("t", "Copy / move / rename:"),
+            ("c", "cp -r folder newfolder"),
+            ("c", "mv file.txt newname.txt"),
+            ("c", "mv file.txt docs/"),
+            ("t", "Remove (be careful — there is no undo):"),
+            ("c", "rm file.txt"),
+            ("c", "rm -r folder"),
+            ("b", "In minty, 'trash' moves to the trash instead of deleting."),
+            ("t", "See a folder tree:"),
+            ("c", "tree -L 2"),
+        ],
+    },
+    {
+        "title": "Search & find",
+        "desc": "Find files and text anywhere.",
+        "lines": [
+            ("t", "Search inside files for text:"),
+            ("c", "grep -rin 'error' ."),
+            ("t", "-r recursive, -i ignore case, -n line numbers, -l filenames only"),
+            ("t", "Find files by name / size / age:"),
+            ("c", "find . -name '*.py'"),
+            ("c", "find /home -size +100M"),
+            ("c", "find . -mtime -7"),
+            ("t", "Delete everything matching (e.g. node_modules):"),
+            ("c", "find . -type d -name 'node_modules' -exec rm -rf {} +"),
+            ("t", "ripgrep ('rg') is much faster for big trees:"),
+            ("c", "rg 'TODO' ."),
+        ],
+    },
+    {
+        "title": "Permissions",
+        "desc": "Who can read, write and run what.",
+        "lines": [
+            ("c", "ls -l"),
+            ("t", "Read it like: drwxr-xr-x. d=dir, then r=read, w=write, x=execute in three groups: owner / group / others."),
+            ("t", "Make a script runnable:"),
+            ("c", "chmod +x script.sh"),
+            ("c", "chmod 755 script.sh"),
+            ("t", "Numbers: 4=read, 2=write, 1=execute. 755 = rwxr-xr-x."),
+            ("c", "chmod 644 file.txt"),
+            ("t", "Change ownership (needs sudo):"),
+            ("c", "sudo chown david:david file.txt"),
+            ("b", "Never 'chmod 777' — that lets everyone write to the file."),
+        ],
+    },
+    {
+        "title": "Pipes & redirects",
+        "desc": "Chain commands together and save their output.",
+        "lines": [
+            ("t", "| sends the left command's output into the right command:"),
+            ("c", "ls -l | less"),
+            ("c", "history | grep python"),
+            ("t", "Redirect output to a file:"),
+            ("c", "command > file.txt"),
+            ("c", "command >> file.txt"),
+            ("c", "command 2> errors.log"),
+            ("c", "command > out.log 2>&1"),
+            ("t", "Run things in order / conditionally:"),
+            ("c", "mkdir x && cd x && touch a"),
+            ("c", "cd x || exit 1"),
+            ("t", "Show output AND save it:"),
+            ("c", "long_task | tee output.log"),
+        ],
+    },
+    {
+        "title": "Git basics",
+        "desc": "Version control for your code.",
+        "lines": [
+            ("c", "git init"),
+            ("c", "git clone https://github.com/user/repo"),
+            ("t", "See what changed:"),
+            ("c", "git status"),
+            ("c", "git diff"),
+            ("t", "Stage, commit, push:"),
+            ("c", "git add ."),
+            ("c", 'git commit -m "my message"'),
+            ("c", "git push"),
+            ("t", "Fetch updates and branches:"),
+            ("c", "git pull"),
+            ("c", "git branch -a"),
+            ("c", "git checkout -b new-feature"),
+            ("c", "git log --oneline"),
+            ("b", "Never commit secrets. Use a .gitignore file."),
+        ],
+    },
+    {
+        "title": "Python basics",
+        "desc": "Run and write Python from the terminal.",
+        "lines": [
+            ("c", "python3 script.py"),
+            ("c", "print('hello world')"),
+            ("t", "Variables:"),
+            ("c", "name = 'david'"),
+            ("c", "age = 30"),
+            ("t", "Conditional & loop:"),
+            ("c", "if age >= 18:"),
+            ("c", "    print('adult')"),
+            ("c", "for i in range(5):"),
+            ("c", "    print(i)"),
+            ("t", "Function:"),
+            ("c", "def greet(name):"),
+            ("c", "    return f'hi {name}'"),
+            ("t", "Read a file:"),
+            ("c", "with open('data.txt') as f:"),
+            ("c", "    print(f.read())"),
+        ],
+    },
+    {
+        "title": "Variables & env",
+        "desc": "Variables, quoting and environment.",
+        "lines": [
+            ("c", "MYVAR=hello"),
+            ("c", "echo $MYVAR"),
+            ("t", "Export so child programs see it:"),
+            ("c", "export MYVAR=hello"),
+            ("t", "Special variables:"),
+            ("c", "echo $HOME"),
+            ("c", "echo $PATH"),
+            ("c", "echo $?"),
+            ("c", "echo $$"),
+            ("t", "$? is the exit code of the last command. $$ is this shell's PID."),
+            ("t", "Quoting matters:"),
+            ("c", 'echo "value $MYVAR"'),
+            ("c", "echo 'value $MYVAR'"),
+            ("t", "Double quotes expand variables, single quotes are literal."),
+        ],
+    },
+    {
+        "title": "Processes & jobs",
+        "desc": "See, stop and background running programs.",
+        "lines": [
+            ("c", "ps aux | grep python"),
+            ("t", "In minty, 'proc' opens a visual manager and 'proc kill PID' force-kills."),
+            ("t", "Freeze a running job with Ctrl+Z, then:"),
+            ("c", "jobs"),
+            ("c", "bg"),
+            ("c", "fg"),
+            ("t", "bg keeps it running in the background, fg brings it back."),
+            ("t", "Kill politely, then escalate:"),
+            ("c", "kill 1234"),
+            ("c", "kill -9 1234"),
+            ("c", "pkill -f server.py"),
+        ],
+    },
+    {
+        "title": "Network",
+        "desc": "Ping, download and connect.",
+        "lines": [
+            ("c", "ping 1.1.1.1"),
+            ("t", "Download files:"),
+            ("c", "curl -O https://example.com/file.zip"),
+            ("c", "wget https://example.com/file.zip"),
+            ("t", "IPs and open ports:"),
+            ("c", "ip a"),
+            ("c", "ss -tulpn"),
+            ("t", "Remote shell and copy (SSH):"),
+            ("c", "ssh user@host"),
+            ("c", "scp file.txt user@host:/remote/path"),
+            ("t", "Look up DNS:"),
+            ("c", "getent hosts example.com"),
+        ],
+    },
+    {
+        "title": "Install software",
+        "desc": "Package manager cheat-sheet.",
+        "lines": [
+            ("t", "Arch (pacman) — minty's 'pkg' command wraps these:"),
+            ("c", "sudo pacman -S package"),
+            ("c", "pacman -Ss search-term"),
+            ("c", "pacman -Rns package"),
+            ("c", "sudo pacman -Syu"),
+            ("t", "AUR helpers (yay / paru):"),
+            ("c", "yay -S package"),
+            ("c", "yay -Syu --noconfirm"),
+            ("t", "Debian / Ubuntu (apt):"),
+            ("c", "sudo apt install package"),
+            ("c", "apt search term"),
+            ("c", "sudo apt update && sudo apt upgrade -y"),
+        ],
+    },
+    {
+        "title": "System info",
+        "desc": "How to look at your machine.",
+        "lines": [
+            ("c", "uname -a"),
+            ("c", "uptime"),
+            ("t", "Disk and memory:"),
+            ("c", "df -h"),
+            ("c", "free -h"),
+            ("t", "CPU / hardware detail:"),
+            ("c", "lscpu"),
+            ("c", "lspci"),
+            ("t", "Pretty overview (usually installed):"),
+            ("c", "fastfetch"),
+            ("c", "neofetch"),
+        ],
+    },
+    {
+        "title": "minty shortcuts",
+        "desc": "The fast keys and built-in managers.",
+        "lines": [
+            ("b", "Ctrl+T   side menu (OpenCode, themes, packages, managers)"),
+            ("b", "Ctrl+R   browse command history"),
+            ("b", "!!       rerun the last command"),
+            ("b", "z        jump to a frequent directory"),
+            ("b", "cdr      pick a recent directory"),
+            ("b", "tab      autocomplete commands and files"),
+            ("t", "Built-in managers:"),
+            ("c", "theme   visual theme editor"),
+            ("c", "pkg     package manager"),
+            ("c", "tmux    tmux session manager"),
+            ("c", "vms     virtual machines"),
+            ("c", "svc     systemd services"),
+            ("c", "proc    processes"),
+            ("c", "net     wifi & connections"),
+            ("t", "Learn more about any topic:"),
+            ("c", "learn git"),
+            ("t", "Exit minty into your real shell:"),
+            ("c", "exit"),
+        ],
+    },
+]
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [""]
+    lines = []
+    cur = words[0]
+    for word in words[1:]:
+        if len(cur) + 1 + len(word) <= width:
+            cur += " " + word
+        else:
+            lines.append(cur)
+            cur = word
+    lines.append(cur)
+    return lines
+
+
+class LearnApp:
+    def __init__(self, initial: str = ""):
+        self.topics = LEARN_TOPICS
+        self.sel = 0
+        self.query = initial
+        self.offset = 0
+
+    def filtered(self):
+        q = self.query.strip().lower()
+        if not q:
+            return self.topics
+        return [t for t in self.topics
+                if q in t["title"].lower() or q in t["desc"].lower()]
+
+    def run(self, stdscr):
+        try:
+            curses.curs_set(0)
+            stdscr.keypad(True)
+            if curses.has_colors():
+                curses.start_color()
+                curses.use_default_colors()
+                curses.init_pair(1, curses.COLOR_GREEN, -1)   # code
+                curses.init_pair(2, curses.COLOR_CYAN, -1)    # bullets
+        except curses.error:
+            pass
+        while True:
+            h, w = stdscr.getmaxyx()
+            items = self.filtered()
+            if items:
+                self.sel = max(0, min(self.sel, len(items) - 1))
+            list_w = max(22, min(36, w // 3))
+            stdscr.erase()
+            stdscr.addnstr(0, 0, " minty learn — code guide ", w - 1,
+                           curses.A_BOLD | curses.A_REVERSE)
+            stdscr.addnstr(1, 0, "topics  (type to filter)".ljust(list_w),
+                           list_w, curses.A_DIM)
+            y = 2
+            visible = h - 3
+            if len(items) > visible:
+                top = max(0, self.sel - visible + 1)
+            else:
+                top = 0
+            for idx in range(top, min(len(items), top + visible)):
+                attr = curses.A_REVERSE if idx == self.sel else 0
+                label = " > " + items[idx]["title"]
+                try:
+                    stdscr.addnstr(y, 0, label.ljust(list_w)[:list_w], list_w, attr)
+                except curses.error:
+                    pass
+                y += 1
+
+            if items:
+                topic = items[self.sel]
+                rx = list_w + 1
+                rw = w - rx - 1
+                if rw > 4:
+                    stdscr.addnstr(1, rx, topic["title"][:rw], rw, curses.A_BOLD)
+                    stdscr.addnstr(2, rx, topic["desc"][:rw], rw, curses.A_DIM)
+                    content = []
+                    for kind, text in topic["lines"]:
+                        for line in _wrap(text, rw - 3):
+                            content.append((kind, line))
+                    ry = 3
+                    body = h - ry - 1
+                    maxoff = max(0, len(content) - body)
+                    self.offset = max(0, min(self.offset, maxoff))
+                    for i in range(self.offset, min(len(content), self.offset + body)):
+                        kind, text = content[i]
+                        attr = 0
+                        pair = 0
+                        if kind == "h":
+                            attr = curses.A_BOLD
+                        elif kind == "c":
+                            pair = 1
+                        elif kind == "b":
+                            pair = 2
+                        seg = ("  " + text)[:rw]
+                        try:
+                            stdscr.addnstr(ry, rx, seg, rw,
+                                           curses.color_pair(pair) | attr if pair else attr)
+                        except curses.error:
+                            pass
+                        ry += 1
+
+            foot = "j/k move   type filter   PgUp/PgDn scroll   Home/End top/bottom   q quit"
+            stdscr.addnstr(h - 1, 0, foot[: w - 1], w - 1, curses.A_DIM)
+            stdscr.refresh()
+            try:
+                key = stdscr.getch()
+            except curses.error:
+                key = -1
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            if key in (curses.KEY_DOWN, ord("j")):
+                if items:
+                    self.sel = (self.sel + 1) % len(items)
+                    self.offset = 0
+            elif key in (curses.KEY_UP, ord("k")):
+                if items:
+                    self.sel = (self.sel - 1) % len(items)
+                    self.offset = 0
+            elif key in (curses.KEY_NPAGE, ord(" ")):
+                self.offset += h - 6
+            elif key in (curses.KEY_PPAGE, ord("b")):
+                self.offset -= h - 6
+            elif key == curses.KEY_HOME:
+                self.offset = 0
+            elif key == curses.KEY_END:
+                self.offset = 10 ** 9
+            elif key in (curses.KEY_BACKSPACE, 127, 8):
+                self.query = self.query[:-1]
+                self.sel = 0
+                self.offset = 0
+            elif 32 <= key < 127 and len(self.query) < 100:
+                self.query += chr(key)
+                self.sel = 0
+                self.offset = 0
+
+
+def run_learn_app(initial: str = "") -> bool:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    app = LearnApp(initial)
+    try:
+        curses.wrapper(app.run)
+    except Exception:
+        return False
+    return True
+
+
+def cmd_learn(args):
+    initial = " ".join(args)
+    if initial:
+        print(f"{DIM}code guide — filtered to '{initial}'{RESET}")
+    if not run_learn_app(initial):
+        err("learn", "needs an interactive terminal")
+        return 1
+    return 0
+
 # ---- minty shell core ----
 
-VERSION = "4.1"
+VERSION = "4.2"
 HISTFILE = os.path.expanduser("~/.minty_history")
 MAXHIST = 2000
 HIST_SENTINEL = "__mintyhist__"
@@ -3700,6 +4152,8 @@ def cmd_menu(args):
         return 0
     if sel == "opencode":
         return cmd_opencode([])
+    if sel == "learn":
+        return cmd_learn([])
     if sel == "fastfetch":
         if shutil.which("fastfetch"):
             return run_any("fastfetch")
@@ -4208,6 +4662,7 @@ COMMANDS = {
     "hist": ("Browse command history (like Ctrl+R)", cmd_hist),
     "config": ("Open the persistent minty config in your editor", cmd_config),
     "opencode": ("Start the OpenCode AI assistant (bundled)", cmd_opencode),
+    "learn": ("Open the code guide with how-to snippets", cmd_learn),
     "menu": ("Open the side menu (or press Ctrl+T)", cmd_menu),
     "theme": ("Open the visual theme app (theme list/apply/export/import)", cmd_theme),
     "pkg": ("Package manager: pkg search/install/remove/update", cmd_pkg),
@@ -4473,6 +4928,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("terminal", "--terminal"):
         sys.argv = [sys.argv[0]]
         raise SystemExit(run_terminal_gui())
+    if len(sys.argv) > 1 and sys.argv[1] in ("learn", "--learn"):
+        raise SystemExit(cmd_learn(sys.argv[2:]))
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")
@@ -4494,7 +4951,7 @@ def main():
         print(banner())
     print(f"{BOLD}minty v{VERSION}{RESET} — type 'help' for commands, 'exit' to quit.  {DIM}(theme: {ACTIVE_THEME}){RESET}")
     if theme.settings.get("show_hint", True):
-        print(f"{DIM}Ctrl+T menu · Ctrl+R history · !! rerun · z jump · tmux vms svc proc net{RESET}")
+        print(f"{DIM}Ctrl+T menu · Ctrl+R history · !! rerun · z jump · learn · tmux vms svc proc net{RESET}")
 
     global LAST_DURATION
     while True:

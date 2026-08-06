@@ -39,6 +39,8 @@ terminal window — no kitty required.
   terminal — it opens its own GTK3/VTE window with colours matched to your
   theme
 - Run `minty` in an existing terminal to start the minty shell there
+- `learn` — built-in code guide: how to create/edit files, git, python,
+  pipes, permissions, network and more (`minty learn git` filters it)
 - `help` — list every built-in command
 - `theme` — browse, apply, edit and share themes
 - `pkg` — search / install / remove packages and update your system
