@@ -56,3 +56,8 @@ minty update --source davethecoderr/minty
 ```bash
 bash ~/.local/share/minty/install.sh --uninstall
 ```
+
+## Credits
+
+AI helped a lot building this. 🧠💚
+
