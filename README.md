@@ -10,6 +10,7 @@ and an fzf-style history picker.
 - Python 3
 - A terminal emulator (kitty recommended, but any terminal works)
 - OpenCode AI is bundled automatically on first run if not present
+- For the built-in minty terminal: `vte3` (Arch: `sudo pacman -S vte3`)
 
 ## Install
 
@@ -34,6 +35,8 @@ make minty the shell that kitty opens.
 ## Use
 
 - Run `minty` in a terminal, or open a new kitty window
+- `terminal` — open minty in its own terminal window (its own GTK3/VTE
+  terminal emulator, colours matched to your theme)
 - `help` — list every built-in command
 - `theme` — browse, apply, edit and share themes
 - `pkg` — search / install / remove packages and update your system

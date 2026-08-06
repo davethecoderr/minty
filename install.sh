@@ -21,9 +21,10 @@ INSTALL_DIR="${MINTY_INSTALL_DIR:-$HOME/.local/share/minty}"
 MINTY_REPO="${MINTY_REPO:-davethecoderr/minty}"
 MINTY_REF="${MINTY_REF:-main}"
 RAW_BASE="https://raw.githubusercontent.com/$MINTY_REPO/$MINTY_REF"
-FILES=(minty.py)
+FILES=(minty.py minty-icon.svg)
 BIN_DIR="$HOME/.local/bin"
 APPS_DIR="$HOME/.local/share/applications"
+ICONS_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 CONFIG_KITTY="${KITTY_CONFIG_DIRECTORY:-$HOME/.config/kitty}/kitty.conf"
 
 GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; RESET=$'\033[0m'
@@ -86,17 +87,20 @@ exec python3 "$INSTALL_DIR/minty.py" "\$@"
 EOF
 chmod +x "$BIN_DIR/minty"
 
-info "Creating desktop launcher"
+info "Installing desktop launcher and icon"
+mkdir -p "$ICONS_DIR"
+install -m 644 "$INSTALL_DIR/minty-icon.svg" "$ICONS_DIR/minty.svg"
 cat > "$APPS_DIR/minty.desktop" <<EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=minty
-Comment=Minty - a tiny shell with OpenCode AI built in
-Exec=$INSTALL_DIR/minty.py
-Terminal=true
-Icon=utilities-terminal
-Categories=Utility;
+Name=minty terminal
+GenericName=Terminal
+Comment=Minty - a tiny shell terminal with OpenCode AI built in
+Exec=$BIN_DIR/minty terminal
+Terminal=false
+Icon=minty
+Categories=System;TerminalEmulator;Utility;
 EOF
 
 case ":$PATH:" in
@@ -126,5 +130,6 @@ fi
 info "Done!"
 echo "  - Open a NEW terminal window -> it should be minty."
 echo "  - Or run: $BIN_DIR/minty"
+echo "  - 'minty terminal' opens minty in its own terminal window."
 echo "  - Side menu with OpenCode: press Ctrl+T inside minty."
   echo "  - To remove: bash $INSTALL_DIR/install.sh --uninstall"

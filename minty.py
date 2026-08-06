@@ -3,7 +3,8 @@
 
 Single file, everything built in: the shell, visual themes, a package
 manager, a tmux session manager, a VM manager, a systemd service manager,
-a process manager, a network/wifi manager and an fzf-style history picker.
+a process manager, a network/wifi manager, an fzf-style history picker and
+its own GTK3/VTE terminal emulator ('minty terminal').
 Install with install.sh or run: python3 minty.py
 """
 
@@ -2607,7 +2608,7 @@ def _net_run_app() -> bool:
 
 # ---- minty shell core ----
 
-VERSION = "4.0"
+VERSION = "4.1"
 HISTFILE = os.path.expanduser("~/.minty_history")
 MAXHIST = 2000
 HIST_SENTINEL = "__mintyhist__"
@@ -3919,6 +3920,226 @@ def cmd_pkg(args):
         return 130
 
 
+# --------------------------------------------------------------------------
+# minty terminal: a real GTK3 + VTE terminal emulator, so minty can be its
+# own terminal window.  Run it with:  minty terminal
+# --------------------------------------------------------------------------
+
+_GUI_CACHE: dict = {}
+
+
+def _terminal_available() -> bool:
+    """True when GTK3 + VTE can be imported (pygobject + vte3 installed)."""
+    if "ok" not in _GUI_CACHE:
+        try:
+            _gi = __import__("gi")
+            _gi.require_version("Gtk", "3.0")
+            _gi.require_version("Vte", "2.91")
+            from gi.repository import Vte  # noqa: F401
+
+            _GUI_CACHE["ok"] = True
+        except Exception:
+            _GUI_CACHE["ok"] = False
+    return _GUI_CACHE["ok"]
+
+
+def _terminal_deps_hint() -> str:
+    return "the minty terminal needs GTK3 + VTE.\n" \
+           "install with: sudo pacman -S vte3  (python-gobject is usually already present)"
+
+
+def _rgba(r: int, g: int, b: int):
+    from gi.repository import Gdk
+
+    return Gdk.RGBA(max(0, min(255, r)) / 255.0,
+                    max(0, min(255, g)) / 255.0,
+                    max(0, min(255, b)) / 255.0,
+                    1.0)
+
+
+def _parse_hex(value, default):
+    if isinstance(value, str) and len(value) == 7 and value.startswith("#"):
+        try:
+            return (int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16))
+        except ValueError:
+            pass
+    return default
+
+
+def _terminal_palette(theme: Theme) -> list:
+    """Build the 16-colour VTE palette from the active minty theme."""
+    c = theme.colors
+
+    def col(key: str, fallback: str):
+        return _rgba(*color_rgb(c.get(key, fallback)))
+
+    return [
+        _rgba(*ANSI_TO_RGB[30]),                       # 0  black
+        col("red", "31"),                              # 1  red
+        col("green", "32"),                            # 2  green
+        col("yellow", "33"),                           # 3  yellow
+        col("blue", "34"),                             # 4  blue
+        col("magenta", "35"),                          # 5  magenta
+        col("cyan", "36"),                             # 6  cyan
+        _rgba(*ANSI_TO_RGB[37]),                       # 7  white
+        _rgba(*ANSI_TO_RGB[90]),                       # 8  bright black
+        col("bright_red", "91"),                       # 9  bright red
+        col("bright_green", "92"),                     # 10 bright green
+        _rgba(*ANSI_TO_RGB[93]),                       # 11 bright yellow
+        _rgba(*ANSI_TO_RGB[94]),                       # 12 bright blue
+        col("bright_magenta", "95"),                   # 13 bright magenta
+        col("bright_cyan", "96"),                      # 14 bright cyan
+        _rgba(*ANSI_TO_RGB[97]),                       # 15 bright white
+    ]
+
+
+def _terminal_font(size=None) -> str:
+    s = settings()
+    size = size or int(s.get("terminal_font_size", 13))
+    return "%s %s" % (s.get("terminal_font", "monospace"), int(size))
+
+
+def _spawn_detached() -> None:
+    """Open a minty terminal window as an independent process."""
+    devnull = os.open(os.devnull, os.O_RDWR)
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.realpath(__file__), "terminal"],
+            stdin=devnull,
+            stdout=devnull,
+            stderr=devnull,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError:
+        pass
+    finally:
+        os.close(devnull)
+
+
+def _bind_terminal_keys(term, window) -> None:
+    from gi.repository import Gdk, Gtk, Pango
+
+    def on_key(widget, event, window):
+        key = Gdk.keyval_name(event.keyval) or ""
+        mods = event.state
+        ctrl = bool(mods & Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(mods & Gdk.ModifierType.SHIFT_MASK)
+        if ctrl and shift:
+            if key in ("C", "c"):
+                term.copy_clipboard()
+                return True
+            if key in ("V", "v"):
+                term.paste_clipboard()
+                return True
+            if key in ("N", "n"):
+                _spawn_detached()
+                return True
+            if key in ("Q", "q"):
+                Gtk.main_quit()
+                return True
+        elif ctrl:
+            s = settings()
+            if key in ("plus", "equal", "KP_Add"):
+                size = min(40, int(s.get("terminal_font_size", 13)) + 1)
+                s["terminal_font_size"] = size
+                term.set_font(Pango.FontDescription.from_string(_terminal_font(size)))
+                return True
+            if key == "minus":
+                size = max(6, int(s.get("terminal_font_size", 13)) - 1)
+                s["terminal_font_size"] = size
+                term.set_font(Pango.FontDescription.from_string(_terminal_font(size)))
+                return True
+            if key == "0":
+                size = int(s.get("terminal_font_size", 13))
+                term.set_font(Pango.FontDescription.from_string(_terminal_font(size)))
+                return True
+        return False
+
+    term.connect("key-press-event", on_key, window)
+
+
+def run_terminal_gui(cwd: str | None = None) -> int:
+    """Open a minty terminal window. Blocks until the window closes."""
+    try:
+        _gi = __import__("gi")
+        _gi.require_version("Gtk", "3.0")
+        _gi.require_version("Vte", "2.91")
+        from gi.repository import Gtk, GLib, Gdk, Pango, Vte
+    except Exception as e:
+        err("terminal", f"{_terminal_deps_hint()}  ({e})")
+        return 1
+
+    theme = load_theme(ACTIVE_THEME)
+    s = settings()
+
+    window = Gtk.Window()
+    window.set_title("minty")
+    window.set_default_size(int(s.get("terminal_width", 980)),
+                            int(s.get("terminal_height", 620)))
+    window.set_icon_name("utilities-terminal")
+
+    term = Vte.Terminal()
+    term.set_scrollback_lines(int(s.get("terminal_scrollback", 10000)))
+    term.set_cursor_blink_mode(Vte.CursorBlinkMode.ON)
+    term.set_mouse_autohide(True)
+    term.set_font(Pango.FontDescription.from_string(_terminal_font()))
+    bg = _parse_hex(s.get("terminal_bg"), (10, 12, 16))
+    fg = _parse_hex(s.get("terminal_fg"), (229, 229, 229))
+    term.set_colors(_rgba(*fg), _rgba(*bg), _terminal_palette(theme))
+
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+    scrolled.add(term)
+    window.add(scrolled)
+
+    term.connect("window-title-changed",
+                 lambda t, *a: window.set_title(t or "minty"))
+    term.connect("child-exited", lambda *a: Gtk.main_quit())
+    window.connect("destroy", lambda *a: Gtk.main_quit())
+    _bind_terminal_keys(term, window)
+
+    envv = dict(os.environ)
+    envv.setdefault("TERM", "xterm-256color")
+    argv = [sys.executable, os.path.realpath(__file__)]
+    try:
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter("ignore", DeprecationWarning)
+            result = term.spawn_sync(
+                Vte.PtyFlags.DEFAULT,
+                cwd or os.getcwd(),
+                argv,
+                ["%s=%s" % (k, v) for k, v in envv.items()],
+                GLib.SpawnFlags.DEFAULT,
+                None,
+                None,
+                None,
+            )
+    except TypeError:
+        err("terminal", "this VTE version changed its spawn API; "
+                        "upgrade with: sudo pacman -S vte3")
+        return 1
+    ok = result[0] if isinstance(result, tuple) else result
+    if not ok:
+        err("terminal", "failed to start minty inside the terminal")
+        return 1
+
+    window.show_all()
+    Gtk.main()
+    return 0
+
+
+def cmd_terminal(args):
+    """Open a minty terminal window (a real GTK3/VTE terminal emulator)."""
+    if not _terminal_available():
+        err("terminal", _terminal_deps_hint())
+        return 1
+    _spawn_detached()
+    print(f"{DIM}opened a minty terminal window — exit it with 'exit'.{RESET}")
+    return 0
+
+
 APP_MODULES = {
     "tmux": _tmux_cli,
     "vms": _vm_cli,
@@ -3995,6 +4216,7 @@ COMMANDS = {
     "svc": ("Manage systemd services", lambda a: cmd_app("svc", a)),
     "proc": ("Process manager (top/htop-style)", lambda a: cmd_app("proc", a)),
     "net": ("Network and wifi manager", lambda a: cmd_app("net", a)),
+    "terminal": ("Open the minty terminal window (its own GTK3/VTE terminal)", cmd_terminal),
     "update": ("Update minty from a local path or github repo", cmd_update),
     "exit": ("Leave the terminal", cmd_exit),
     "quit": ("Leave the terminal", cmd_exit),
@@ -4248,6 +4470,9 @@ def _handle_hist_line(line: str) -> None:
 
 def main():
     global _QUIT
+    if len(sys.argv) > 1 and sys.argv[1] in ("terminal", "--terminal"):
+        sys.argv = [sys.argv[0]]
+        raise SystemExit(run_terminal_gui())
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")
