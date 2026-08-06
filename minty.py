@@ -3402,7 +3402,7 @@ def cmd_tour(args):
 
 # ---- minty shell core ----
 
-VERSION = "4.5"
+VERSION = "4.6"
 HISTFILE = os.path.expanduser("~/.minty_history")
 MAXHIST = 2000
 HIST_SENTINEL = "__mintyhist__"
@@ -3552,7 +3552,21 @@ def _venv_name() -> str | None:
     return None
 
 
+def _emit_cwd() -> None:
+    """Tell the terminal (VTE/kitty/...) where we are via OSC 7."""
+    if not (sys.stdout.isatty() and sys.stdout.encoding):
+        return
+    try:
+        import urllib.parse
+        uri = "file://" + urllib.parse.quote(os.getcwd())
+        sys.stdout.write(f"\033]7;{uri}\033\\")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def prompt() -> str:
+    _emit_cwd()
     theme = load_theme(ACTIVE_THEME)
     pconf = theme.prompt
     user = os.environ.get("USER") or "user"
@@ -5009,6 +5023,10 @@ class _Tab:
         self.box.pack_start(root.widget, True, True, 0)
 
 
+def _tab_title(cwd) -> str:
+    return os.path.basename(cwd) if cwd else "minty"
+
+
 class MintyTerm:
     """The minty terminal window: GTK3 + VTE with tabs and split panes."""
 
@@ -5118,11 +5136,12 @@ class MintyTerm:
         tab = _Tab(self, cwd)
         for leaf in tab.leafs:
             self._link(leaf)
-        label = self.Gtk.Label(label="minty")
+        label = self.Gtk.Label(label=_tab_title(tab.cwd))
         label.show()
         idx = self.notebook.append_page(tab.box, label)
         self.notebook.set_current_page(idx)
         self.tabs.append(tab)
+        self.window.set_title(_tab_title(tab.cwd))
         return tab
 
     def split(self, leaf, vertical):
@@ -5263,6 +5282,11 @@ class MintyTerm:
             if p:
                 leaf.cwd = p
                 tab.cwd = p
+        title = _tab_title(leaf.cwd or tab.cwd)
+        self._update_tab_label(tab, title)
+        idx = self.notebook.page_num(tab.box)
+        if idx == self.notebook.get_current_page():
+            self.window.set_title(title)
 
     def _title_changed(self, term, *a):
         entry = self._find(term)
@@ -5481,6 +5505,11 @@ class MintyTerm:
 def run_terminal_gui(cwd: str | None = None) -> int:
     """Open a minty terminal window. Blocks until the window closes."""
     try:
+        import warnings as _w
+        _w.simplefilter("ignore", DeprecationWarning)
+    except Exception:
+        pass
+    try:
         _gi = __import__("gi")
         _gi.require_version("Gtk", "3.0")
         _gi.require_version("Vte", "2.91")
@@ -5488,6 +5517,11 @@ def run_terminal_gui(cwd: str | None = None) -> int:
     except Exception as e:
         err("terminal", f"{_terminal_deps_hint()}  ({e})")
         return 1
+
+    try:
+        GLib.set_prgname("minty")
+    except Exception:
+        pass
 
     theme = load_theme(ACTIVE_THEME)
     s = settings()

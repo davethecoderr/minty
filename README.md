@@ -39,6 +39,18 @@ Both methods copy `minty.py` into `~/.local/share/minty`, create a `minty`
 command in `~/.local/bin` and add a desktop launcher. `minty` opens its own
 terminal window — no kitty required.
 
+### Make it your default terminal
+
+Set your desktop/DE to launch `minty terminal` instead of your current
+terminal. Examples:
+
+- Hyprland (in your Hyprland config): `$term = /home/<user>/.local/bin/minty terminal`
+- Desktop app: `minty terminal` (already installed as a `.desktop` entry)
+
+The minty terminal window registers as class `minty`, tracks the current
+folder in its title/tabs (via OSC 7), and inherits its colors, palette and
+font from your active minty theme.
+
 ## Use
 
 - Launch the `minty terminal` desktop app, or run `minty terminal` in any
