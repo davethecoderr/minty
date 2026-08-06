@@ -3408,7 +3408,7 @@ def cmd_tour(args):
 
 # ---- minty shell core ----
 
-VERSION = "4.6"
+VERSION = "4.7"
 HISTFILE = os.path.expanduser("~/.minty_history")
 MAXHIST = 2000
 HIST_SENTINEL = "__mintyhist__"
