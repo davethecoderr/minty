@@ -21,7 +21,7 @@ INSTALL_DIR="${MINTY_INSTALL_DIR:-$HOME/.local/share/minty}"
 MINTY_REPO="${MINTY_REPO:-davethecoderr/minty}"
 MINTY_REF="${MINTY_REF:-main}"
 RAW_BASE="https://raw.githubusercontent.com/$MINTY_REPO/$MINTY_REF"
-FILES=(mini_terminal.py minty_menu.py minty_theme.py minty_pkg.py minty_hist.py minty_tmux.py minty_vm.py minty_svc.py minty_proc.py minty_net.py minty.sh)
+FILES=(minty.py)
 BIN_DIR="$HOME/.local/bin"
 APPS_DIR="$HOME/.local/share/applications"
 CONFIG_KITTY="${KITTY_CONFIG_DIRECTORY:-$HOME/.config/kitty}/kitty.conf"
@@ -68,6 +68,10 @@ done
 
 install -m 755 "$0" "$INSTALL_DIR/install.sh" 2>/dev/null || true
 
+for old in mini_terminal.py minty_menu.py minty_theme.py minty_pkg.py minty_hist.py minty_tmux.py minty_vm.py minty_svc.py minty_proc.py minty_net.py minty.sh; do
+  rm -f "$INSTALL_DIR/$old"
+done
+
 if [ -f "$SOURCE_DIR/opencode" ]; then
   info "Bundling opencode ($(du -h "$SOURCE_DIR/opencode" | cut -f1))..."
   install -m 755 "$SOURCE_DIR/opencode" "$INSTALL_DIR/opencode"
@@ -78,7 +82,7 @@ fi
 info "Creating 'minty' command in $BIN_DIR"
 cat > "$BIN_DIR/minty" <<EOF
 #!/usr/bin/env bash
-exec "$INSTALL_DIR/minty.sh" "\$@"
+exec python3 "$INSTALL_DIR/minty.py" "\$@"
 EOF
 chmod +x "$BIN_DIR/minty"
 
@@ -89,7 +93,7 @@ Version=1.0
 Type=Application
 Name=minty
 Comment=Minty - a tiny shell with OpenCode AI built in
-Exec=$INSTALL_DIR/minty.sh
+Exec=$INSTALL_DIR/minty.py
 Terminal=true
 Icon=utilities-terminal
 Categories=Utility;
@@ -101,13 +105,13 @@ case ":$PATH:" in
 esac
 
 if command -v kitty >/dev/null 2>&1; then
-  if [ -f "$CONFIG_KITTY" ] && grep -qE '^shell .*minty\.sh' "$CONFIG_KITTY"; then
-    sed -i -E "s|^shell .*minty\.sh.*|shell $INSTALL_DIR/minty.sh|" "$CONFIG_KITTY"
+  if [ -f "$CONFIG_KITTY" ] && grep -qE '^shell .*minty\.(sh|py)' "$CONFIG_KITTY"; then
+    sed -i -E "s@^shell .*minty\.(sh|py).*@shell $INSTALL_DIR/minty.py@" "$CONFIG_KITTY"
     info "Updated kitty to open minty as its shell ($CONFIG_KITTY)"
   else
     mkdir -p "$(dirname "$CONFIG_KITTY")"
     touch "$CONFIG_KITTY"
-    printf '\n# minty: open minty as the terminal shell (exit minty to reach your real shell)\nshell %s/minty.sh\n' "$INSTALL_DIR" >> "$CONFIG_KITTY"
+    printf '\n# minty: open minty as the terminal shell (exit minty to reach your real shell)\nshell %s/minty.py\n' "$INSTALL_DIR" >> "$CONFIG_KITTY"
     info "Configured kitty to open minty as its shell ($CONFIG_KITTY)"
   fi
 else
@@ -115,7 +119,7 @@ else
 fi
 
 info "Verifying install..."
-python3 -m py_compile "$INSTALL_DIR/mini_terminal.py" "$INSTALL_DIR/minty_menu.py" "$INSTALL_DIR/minty_theme.py" "$INSTALL_DIR/minty_pkg.py" "$INSTALL_DIR/minty_hist.py" "$INSTALL_DIR/minty_tmux.py" "$INSTALL_DIR/minty_vm.py" "$INSTALL_DIR/minty_svc.py" "$INSTALL_DIR/minty_proc.py" "$INSTALL_DIR/minty_net.py"
+python3 -m py_compile "$INSTALL_DIR/minty.py"
 if [ -x "$INSTALL_DIR/opencode" ]; then
   info "Bundled opencode is ready."
 fi
