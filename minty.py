@@ -1381,6 +1381,8 @@ MENU_ITEMS = [
     ("Services", "svc", "Start, stop, enable and manage systemd services."),
     ("Processes", "proc", "Kill processes or open btop/htop."),
     ("Network", "net", "Join wifi and manage connections."),
+    ("Settings", "settings", "Visual editor for minty's terminal settings."),
+    ("First-run tour", "tour", "Replay the quick minty walkthrough."),
     ("Edit minty config", "config", "Open minty's persistent config in your editor."),
     ("minty version", "version", "Show which version of minty is running."),
     ("Clear screen", "clear", "Clear the terminal."),
@@ -3058,9 +3060,299 @@ def cmd_learn(args):
         return 1
     return 0
 
+# ---- settings: graphical config editor (minty_settings.py) ----
+
+SETTINGS_SPEC = [
+    ("terminal_font_size", "int", "Terminal font size", "13"),
+    ("terminal_font", "str", "Terminal font name", "monospace"),
+    ("terminal_width", "int", "Terminal window width", "980"),
+    ("terminal_height", "int", "Terminal window height", "620"),
+    ("terminal_scrollback", "int", "Scrollback lines", "10000"),
+    ("terminal_bg", "hex", "Terminal background color", "#0a0c10"),
+    ("terminal_fg", "hex", "Terminal foreground color", "#e5e5e5"),
+    ("restore_cwd", "bool", "Reopen last directory on start", "True"),
+    ("notify_threshold", "float", "Notify after a command runs this long", "5.0"),
+    ("duration_threshold", "float", "Show duration after a command runs this long", "3.0"),
+    ("suggest_install", "bool", "Suggest installing unknown commands", "True"),
+]
+
+
+class SettingsApp:
+    def __init__(self):
+        self.sel = 0
+        self.msg = "Enter edits a value · space toggles booleans · r resets · q quits"
+
+    def cur(self):
+        return SETTINGS_SPEC[self.sel]
+
+    def value(self, spec):
+        return str(settings().get(spec[0], spec[3]))
+
+    def save(self, key, value):
+        _save_setting(key, value)
+
+    def edit(self, stdscr):
+        name, kind, desc, default = self.cur()
+        if kind == "bool":
+            new = str(settings().get(name, default)).lower() != "true"
+            self.save(name, new)
+            self.msg = f"{name} -> {new}"
+            return
+        prompt = f"{name} = "
+        raw = _input_line(stdscr, prompt, self.value(self.cur()))
+        if raw is None:
+            return
+        try:
+            if kind == "int":
+                value = int(raw)
+            elif kind == "float":
+                value = float(raw)
+            elif kind == "hex":
+                if not (len(raw) == 7 and raw.startswith("#")):
+                    self.msg = "colors must look like #0a0c10"
+                    return
+                value = raw
+            else:
+                value = raw
+            self.save(name, value)
+            self.msg = f"{name} -> {value}"
+        except ValueError:
+            self.msg = f"{name} needs a {kind} value"
+
+    def reset(self):
+        name, kind, desc, default = self.cur()
+        value = default
+        if kind == "int":
+            value = int(default)
+        elif kind == "float":
+            value = float(default)
+        elif kind == "bool":
+            value = default.lower() == "true"
+        self.save(name, value)
+        self.msg = f"{name} reset to {value}"
+
+    def run(self, stdscr):
+        try:
+            curses.curs_set(0)
+            stdscr.keypad(True)
+        except curses.error:
+            pass
+        while True:
+            h, w = stdscr.getmaxyx()
+            stdscr.erase()
+            stdscr.addnstr(0, 0, " minty settings ", w - 1,
+                           curses.A_BOLD | curses.A_REVERSE)
+            y = 2
+            for idx, (name, kind, desc, default) in enumerate(SETTINGS_SPEC):
+                if y >= h - 2:
+                    break
+                attr = curses.A_REVERSE if idx == self.sel else 0
+                val = self.value(SETTINGS_SPEC[idx])
+                line = f" {name:<22} {val:<16} {desc}"
+                try:
+                    stdscr.addnstr(y, 0, line.ljust(w - 1)[:w - 1], w - 1, attr)
+                except curses.error:
+                    pass
+                y += 1
+            stdscr.addnstr(h - 1, 0, " " + self.msg, w - 1, curses.A_DIM)
+            stdscr.refresh()
+            try:
+                key = stdscr.getch()
+            except curses.error:
+                key = -1
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            if key in (curses.KEY_DOWN, ord("j")):
+                self.sel = (self.sel + 1) % len(SETTINGS_SPEC)
+            elif key in (curses.KEY_UP, ord("k")):
+                self.sel = (self.sel - 1) % len(SETTINGS_SPEC)
+            elif key in (10, 13, curses.KEY_ENTER, ord(" ")):
+                self.edit(stdscr)
+            elif key in (ord("r"), ord("R")):
+                self.reset()
+
+
+def run_settings_app() -> bool:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    app = SettingsApp()
+    try:
+        curses.wrapper(app.run)
+    except Exception:
+        return False
+    return True
+
+
+def cmd_settings(args):
+    if args:
+        sub = args[0]
+        if sub == "get" and len(args) > 1:
+            print(settings().get(args[1], ""))
+            return 0
+        if sub == "set" and len(args) > 2:
+            name, raw = args[1], args[2]
+            for (n, kind, _d, default) in SETTINGS_SPEC:
+                if n == name:
+                    try:
+                        if kind == "int":
+                            value = int(raw)
+                        elif kind == "float":
+                            value = float(raw)
+                        elif kind == "bool":
+                            value = raw.lower() in ("true", "1", "yes", "on")
+                        elif kind == "hex":
+                            if not (len(raw) == 7 and raw.startswith("#")):
+                                err("settings", "colors must look like #0a0c10")
+                                return 1
+                            value = raw
+                        else:
+                            value = raw
+                        _save_setting(name, value)
+                        print(f"{GREEN}{name} -> {value}{RESET}")
+                        return 0
+                    except ValueError:
+                        err("settings", f"{name} needs a {kind} value")
+                        return 1
+            err("settings", f"unknown setting: {name}")
+            return 1
+        err("settings", "usage: settings | settings get <key> | settings set <key> <value>")
+        return 2
+    if not run_settings_app():
+        err("settings", "needs an interactive terminal")
+        return 1
+    return 0
+
+# ---- tour: first-run walkthrough (minty_tour.py) ----
+
+TOUR_PAGES = [
+    ("Welcome to minty", [
+        "minty is a terminal and a shell in one — its own GTK3/VTE terminal "
+        "window with themes, a package manager, AI and built-in managers.",
+        "",
+        "Type 'exit' inside minty to drop to your real shell.",
+        "Press Enter to keep going through this quick tour.",
+    ]),
+    ("Your terminal", [
+        "Run 'minty terminal' (or the desktop app) to open its own window.",
+        "",
+        "  Ctrl+Shift+T      new tab",
+        "  Ctrl+Shift+E / O  split down / split right",
+        "  Ctrl+Shift+W      close pane or tab",
+        "  Ctrl+PageUp/Down  switch tabs   Ctrl+1..9  jump",
+        "  Ctrl+/-/0         zoom the font",
+        "  Ctrl+Shift+C/V    copy / paste",
+        "  right-click       context menu with open link",
+    ]),
+    ("Built-in commands", [
+        "  theme   visual theme editor and gallery",
+        "  pkg     package manager (search/install/update)",
+        "  tmux    tmux session manager",
+        "  vms     virtual machines",
+        "  svc     systemd services",
+        "  proc    processes",
+        "  net     wifi and connections",
+        "  open    open files with your default app",
+        "  clip    copy text to the clipboard",
+    ]),
+    ("Quick keys", [
+        "  Ctrl+T   side menu (OpenCode, themes, packages, managers)",
+        "  Ctrl+R   browse command history",
+        "  !!       rerun the last command",
+        "  z        jump to a frequent directory",
+        "  tab      autocomplete commands and files",
+    ]),
+    ("Learn & help", [
+        "  learn    the code guide — how to create/edit files, git,",
+        "           python, pipes, permissions, network and more",
+        "  learn git   filter the guide",
+        "  help     list every command",
+        "  opencode start the AI assistant",
+        "  settings visual settings editor",
+        "",
+        "That's it — enjoy minty!  (run 'tour' again any time)",
+    ]),
+]
+
+
+class PagerApp:
+    def __init__(self, pages):
+        self.pages = pages
+        self.page = 0
+        self.offset = 0
+
+    def run(self, stdscr):
+        try:
+            curses.curs_set(0)
+            stdscr.keypad(True)
+        except curses.error:
+            pass
+        while True:
+            h, w = stdscr.getmaxyx()
+            title, lines = self.pages[self.page]
+            stdscr.erase()
+            stdscr.addnstr(0, 0, f" {title} ", w - 1,
+                           curses.A_BOLD | curses.A_REVERSE)
+            content = []
+            for line in lines:
+                for ln in _wrap(line, w - 3):
+                    content.append(ln)
+            y = 2
+            body = h - y - 1
+            maxoff = max(0, len(content) - body)
+            self.offset = max(0, min(self.offset, maxoff))
+            for i in range(self.offset, min(len(content), self.offset + body)):
+                try:
+                    stdscr.addnstr(y, 2, content[i][:w - 3], w - 3)
+                except curses.error:
+                    pass
+                y += 1
+            nav = f"{self.page + 1}/{len(self.pages)}   space/n next   p prev   q quit"
+            stdscr.addnstr(h - 1, 0, nav[: w - 1], w - 1, curses.A_DIM)
+            stdscr.refresh()
+            try:
+                key = stdscr.getch()
+            except curses.error:
+                key = -1
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            if key in (10, 13, curses.KEY_ENTER, ord(" "), ord("n"), ord("N")):
+                if self.page < len(self.pages) - 1:
+                    self.page += 1
+                    self.offset = 0
+                else:
+                    return
+            elif key in (ord("p"), ord("P")):
+                self.page = max(0, self.page - 1)
+                self.offset = 0
+            elif key in (curses.KEY_DOWN, ord("j")):
+                self.offset += 1
+            elif key in (curses.KEY_UP, ord("k")):
+                self.offset -= 1
+
+
+def run_tour(start: int = 0) -> bool:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    pages = TOUR_PAGES[start:] if 0 <= start < len(TOUR_PAGES) else TOUR_PAGES
+    try:
+        curses.wrapper(PagerApp(pages).run)
+        return True
+    except Exception:
+        return False
+
+
+def cmd_tour(args):
+    start = 0
+    if args and args[0].lstrip("-").isdigit():
+        start = int(args[0])
+    if not run_tour(start):
+        err("tour", "needs an interactive terminal")
+        return 1
+    return 0
+
 # ---- minty shell core ----
 
-VERSION = "4.3"
+VERSION = "4.4"
 HISTFILE = os.path.expanduser("~/.minty_history")
 MAXHIST = 2000
 HIST_SENTINEL = "__mintyhist__"
@@ -3111,6 +3403,12 @@ def load_user_aliases() -> None:
 def settings() -> dict:
     cfg = get_config()
     return cfg.setdefault("settings", {})
+
+
+def _save_setting(key: str, value) -> None:
+    cfg = get_config()
+    cfg.setdefault("settings", {})[key] = value
+    save_config(cfg)
 
 
 def apply_theme(name: str) -> Theme:
@@ -4230,6 +4528,10 @@ def cmd_menu(args):
             apply_theme(applied)
             print(f"{GREEN}theme '{applied}' applied.{RESET}")
         return 0
+    if sel == "settings":
+        return cmd_settings([])
+    if sel == "tour":
+        return cmd_tour([])
     if sel == "packages":
         return cmd_pkg([])
     if sel == "system_update":
@@ -4517,16 +4819,70 @@ def _uri_to_path(uri: str, GLib) -> str | None:
         return None
 
 
+class _Leaf:
+    kind = "leaf"
+
+    def __init__(self, owner, tab, cwd):
+        self.owner = owner
+        self.tab = tab
+        self.parent = None
+        self.cwd = cwd
+        self.term = owner.make_term()
+        self.scrolled = owner.Gtk.ScrolledWindow()
+        self.scrolled.set_policy(owner.Gtk.PolicyType.AUTOMATIC,
+                                 owner.Gtk.PolicyType.NEVER)
+        self.scrolled.add(self.term)
+        self.scrolled.show()
+        self.widget = self.scrolled
+        owner.spawn(self.term, cwd)
+
+
+class _Split:
+    kind = "split"
+
+    def __init__(self, owner, vertical):
+        self.owner = owner
+        self.parent = None
+        self.vertical = vertical
+        self.a = None
+        self.b = None
+        self.widget = owner.Gtk.Paned()
+        self.widget.set_orientation(
+            owner.Gtk.Orientation.VERTICAL if vertical
+            else owner.Gtk.Orientation.HORIZONTAL)
+
+
+def _first_leaf(node):
+    while getattr(node, "kind", "") != "leaf":
+        node = node.a
+    return node
+
+
+class _Tab:
+    def __init__(self, owner, cwd):
+        self.owner = owner
+        self.cwd = cwd
+        self.leafs: list = []
+        self.active = None
+        self.box = owner.Gtk.Box(owner.Gtk.Orientation.VERTICAL, 0)
+        self.box.show()
+        root = _Leaf(owner, self, cwd)
+        self.leafs.append(root)
+        self.active = root
+        self.area = root
+        self.box.pack_start(root.widget, True, True, 0)
+
+
 class MintyTerm:
-    """The minty terminal window: GTK3 + VTE with tabs."""
+    """The minty terminal window: GTK3 + VTE with tabs and split panes."""
 
     def __init__(self, Gtk, GLib, Gdk, Pango, Vte, theme, s, cwd=None):
         self.Gtk, self.GLib = Gtk, GLib
         self.Gdk, self.Pango, self.Vte = Gdk, Pango, Vte
         self.theme = theme
         self.s = s
-        self.terms: list = []
-        self.cwds: list = []
+        self.tabs: list = []
+        self.term_index: dict = {}
         self.font_size = int(s.get("terminal_font_size", 13))
         self.bg = _parse_hex(s.get("terminal_bg"), (10, 12, 16))
         self.fg = _parse_hex(s.get("terminal_fg"), (229, 229, 229))
@@ -4560,7 +4916,7 @@ class MintyTerm:
                              max(0, min(255, g)) / 255.0,
                              max(0, min(255, b)) / 255.0, 1.0)
 
-    def _spawn_in_term(self, term, cwd):
+    def spawn(self, term, cwd):
         envv = dict(os.environ)
         envv.setdefault("TERM", "xterm-256color")
         argv = [sys.executable, os.path.realpath(__file__)]
@@ -4583,7 +4939,7 @@ class MintyTerm:
         ok = result[0] if isinstance(result, tuple) else result
         return bool(ok)
 
-    def new_tab(self, cwd=None):
+    def make_term(self):
         term = self.Vte.Terminal()
         term.set_scrollback_lines(int(self.s.get("terminal_scrollback", 10000)))
         term.set_cursor_blink_mode(self.Vte.CursorBlinkMode.ON)
@@ -4591,89 +4947,154 @@ class MintyTerm:
         term.set_font(self.Pango.FontDescription.from_string(_terminal_font(self.font_size)))
         term.set_colors(self._rgba(*self.fg), self._rgba(*self.bg),
                         _terminal_palette(self.theme))
+        try:
+            term.set_allow_hyperlink(True)
+        except Exception:
+            pass
         term.connect("key-press-event", self._term_key)
         term.connect("child-exited", self._child_exited)
         term.connect("window-title-changed", self._title_changed)
         term.connect("current-directory-uri-changed", self._dir_changed)
-        if not self._spawn_in_term(term, cwd):
-            err("terminal", "failed to start minty inside the terminal")
-            return None
-        scrolled = self.Gtk.ScrolledWindow()
-        scrolled.set_policy(self.Gtk.PolicyType.AUTOMATIC, self.Gtk.PolicyType.NEVER)
-        scrolled.add(term)
-        scrolled.show()
-        label = self.Gtk.Label(label="minty")
-        label.show()
-        idx = self.notebook.append_page(scrolled, label)
-        self.notebook.set_current_page(idx)
-        self.terms.append(term)
-        self.cwds.append(None)
+        term.connect("button-press-event", self._term_button)
+        term.connect("focus-in-event", self._focus_in)
         return term
 
-    def _index_of(self, term):
-        for i, t in enumerate(self.terms):
-            if t is term:
-                return i
-        return None
+    def _link(self, leaf):
+        self.term_index[leaf.term] = (leaf.tab, leaf)
 
-    def _dir_changed(self, term, *a):
-        idx = self._index_of(term)
-        if idx is None:
+    def _find(self, term):
+        return self.term_index.get(term)
+
+    def _leaf_of(self, term):
+        entry = self.term_index.get(term)
+        return entry[1] if entry else None
+
+    def _cwd_of(self, term):
+        entry = self.term_index.get(term)
+        if not entry:
+            return None
+        tab, leaf = entry
+        return leaf.cwd or tab.cwd or None
+
+    def new_tab(self, cwd=None):
+        tab = _Tab(self, cwd)
+        for leaf in tab.leafs:
+            self._link(leaf)
+        label = self.Gtk.Label(label="minty")
+        label.show()
+        idx = self.notebook.append_page(tab.box, label)
+        self.notebook.set_current_page(idx)
+        self.tabs.append(tab)
+        return tab
+
+    def split(self, leaf, vertical):
+        if leaf is None or leaf.kind != "leaf":
+            return None
+        tab = leaf.tab
+        new_leaf = _Leaf(self, tab, leaf.cwd or tab.cwd)
+        tab.leafs.append(new_leaf)
+        self._link(new_leaf)
+        split = _Split(self, vertical)
+        split.a = leaf
+        split.b = new_leaf
+        self._swap(tab, leaf, split)
+        leaf.parent = split
+        new_leaf.parent = split
+        split.widget.pack1(leaf.widget, True, False)
+        split.widget.pack2(new_leaf.widget, True, False)
+        split.widget.show_all()
+        tab.active = new_leaf
+        return new_leaf
+
+    def _swap(self, tab, old_node, new_node):
+        p = old_node.parent
+        if p is None:
+            self._detach(new_node.widget)
+            tab.box.remove(old_node.widget)
+            tab.box.pack_start(new_node.widget, True, True, 0)
+            tab.area = new_node
+            new_node.parent = None
+        else:
+            paned = p.widget
+            first = p.a is old_node
+            if first:
+                p.a = new_node
+            else:
+                p.b = new_node
+            self._detach(new_node.widget)
+            paned.remove(old_node.widget)
+            if first:
+                paned.pack1(new_node.widget, True, False)
+            else:
+                paned.pack2(new_node.widget, True, False)
+            new_node.parent = p
+            new_node.widget.show_all()
+
+    @staticmethod
+    def _detach(widget):
+        parent = widget.get_parent()
+        if parent is not None:
+            try:
+                parent.remove(widget)
+            except Exception:
+                pass
+
+    def _close_leaf_or_tab(self, tab, leaf):
+        if tab not in self.tabs or leaf not in tab.leafs:
             return
-        try:
-            uri = term.get_current_directory_uri()
-        except Exception:
-            uri = None
-        if uri and idx < len(self.cwds):
-            self.cwds[idx] = _uri_to_path(uri, self.GLib)
+        if len(tab.leafs) == 1:
+            self._close_tab(tab)
+        else:
+            self._close_leaf(tab, leaf)
 
-    def _title_changed(self, term, *a):
-        idx = self._index_of(term)
-        if idx is None:
+    def _close_leaf(self, tab, leaf):
+        p = leaf.parent
+        if p is None:
+            self._close_tab(tab)
             return
+        sibling = p.b if p.a is leaf else p.a
+        self._swap(tab, p, sibling)
+        tab.leafs.remove(leaf)
+        if tab.active is leaf:
+            tab.active = _first_leaf(sibling)
         try:
-            title = term.get_window_title() or "minty"
-        except Exception:
-            title = "minty"
-        tab = self.notebook.get_nth_page(idx)
-        if tab is not None:
-            label = self.notebook.get_tab_label(tab)
-            if label is not None and hasattr(label, "set_text"):
-                label.set_text(title)
-        if self.notebook.get_current_page() == idx:
-            self.window.set_title(title)
-
-    def _child_exited(self, term, *a):
-        idx = self._index_of(term)
-        if idx is not None:
-            self.GLib.idle_add(self._close_tab, idx, True)
-
-    def _close_tab(self, idx, force=True):
-        if not (0 <= idx < len(self.terms)):
-            return False
-        term = self.terms.pop(idx)
-        self.notebook.remove_page(idx)
-        if idx < len(self.cwds):
-            self.cwds.pop(idx)
-        try:
-            term.destroy()
+            leaf.term.destroy()
         except Exception:
             pass
-        if not self.terms:
+        self.term_index.pop(leaf.term, None)
+
+    def _close_tab(self, tab):
+        if tab not in self.tabs:
+            return
+        idx = self.notebook.page_num(tab.box)
+        if idx >= 0:
+            self.notebook.remove_page(idx)
+        self.tabs.remove(tab)
+        for leaf in list(tab.leafs):
+            try:
+                leaf.term.destroy()
+            except Exception:
+                pass
+            self.term_index.pop(leaf.term, None)
+        if not self.tabs:
             self.Gtk.main_quit()
-        return True
 
     def current_cwd(self):
         idx = self.notebook.get_current_page()
-        if 0 <= idx < len(self.cwds) and self.cwds[idx]:
-            return self.cwds[idx]
+        if 0 <= idx < len(self.tabs):
+            tab = self.tabs[idx]
+            if tab.active and tab.active.cwd:
+                return tab.active.cwd
+            return tab.cwd
         return None
 
     def set_font_size(self, size):
         self.font_size = size
         self.s["terminal_font_size"] = size
-        for term in self.terms:
-            term.set_font(self.Pango.FontDescription.from_string(_terminal_font(size)))
+        for tab in self.tabs:
+            for leaf in tab.leafs:
+                leaf.term.set_font(
+                    self.Pango.FontDescription.from_string(_terminal_font(size)))
 
     def next_tab(self, delta):
         n = self.notebook.get_n_pages()
@@ -4681,6 +5102,159 @@ class MintyTerm:
             return
         cur = self.notebook.get_current_page()
         self.notebook.set_current_page((cur + delta) % n)
+
+    def _update_tab_label(self, tab, title=None):
+        idx = self.notebook.page_num(tab.box)
+        if idx < 0:
+            return
+        label = self.notebook.get_tab_label(tab.box)
+        if label is not None and hasattr(label, "set_text"):
+            label.set_text(title or "minty")
+
+    def _dir_changed(self, term, *a):
+        entry = self._find(term)
+        if not entry:
+            return
+        tab, leaf = entry
+        try:
+            uri = term.get_current_directory_uri()
+        except Exception:
+            uri = None
+        if uri:
+            p = _uri_to_path(uri, self.GLib)
+            if p:
+                leaf.cwd = p
+                tab.cwd = p
+
+    def _title_changed(self, term, *a):
+        entry = self._find(term)
+        if not entry:
+            return
+        tab, _ = entry
+        try:
+            title = term.get_window_title() or "minty"
+        except Exception:
+            title = "minty"
+        self._update_tab_label(tab, title)
+        idx = self.notebook.page_num(tab.box)
+        if idx == self.notebook.get_current_page():
+            self.window.set_title(title)
+
+    def _focus_in(self, term, *a):
+        entry = self._find(term)
+        if entry:
+            entry[0].active = entry[1]
+
+    def _child_exited(self, term, *a):
+        entry = self._find(term)
+        if entry:
+            self.GLib.idle_add(self._close_leaf_or_tab, *entry)
+
+    def _term_button(self, term, event, *a):
+        if event.button == 3:
+            self._menu(term, event)
+            return True
+        return False
+
+    def _selection_text(self, term):
+        try:
+            return term.get_selected_text() or ""
+        except Exception:
+            return ""
+
+    def _link_under(self, term, event):
+        try:
+            return term.get_hyperlink_at_position(event.x, event.y)
+        except Exception:
+            return None
+
+    def _open_uri(self, uri):
+        opener = shutil.which("xdg-open")
+        if not opener:
+            err("terminal", "xdg-open is not installed")
+            return
+        try:
+            subprocess.Popen([opener, uri],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+
+    def _menu(self, term, event):
+        menu = self.Gtk.Menu()
+
+        def add(label, cb):
+            it = self.Gtk.MenuItem(label=label)
+            it.connect("activate", lambda *x: cb())
+            menu.append(it)
+
+        def add_sep():
+            menu.append(self.Gtk.SeparatorMenuItem())
+
+        add("Copy", term.copy_clipboard)
+        add("Paste", term.paste_clipboard)
+        add("Select all", lambda: term.select_all())
+        uri = self._link_under(term, event)
+        if uri:
+            add("Open link: " + uri[:40], lambda: self._open_uri(uri))
+        else:
+            sel = self._selection_text(term).strip()
+            if sel and re.match(r"^[a-z][a-z0-9+.-]*://", sel, re.I):
+                add("Open selection", lambda: self._open_uri(sel))
+        add_sep()
+        add("New tab", lambda: self.new_tab(self._cwd_of(term)))
+        add("Split right", lambda: self.split(self._leaf_of(term), False))
+        add("Split down", lambda: self.split(self._leaf_of(term), True))
+        add_sep()
+        entry = self._find(term)
+        if entry:
+            tab, leaf = entry
+            if len(tab.leafs) > 1:
+                add("Close pane", lambda: self._close_leaf_or_tab(tab, leaf))
+            add("Close tab", lambda: self._close_tab(tab))
+        add("New window", _spawn_detached)
+        menu.show_all()
+        try:
+            menu.popup_at_pointer(event)
+        except Exception:
+            pass
+
+    def _nav_pane(self, term, dx, dy):
+        entry = self._find(term)
+        if not entry:
+            return
+        tab, leaf = entry
+        p = leaf.parent
+        if p is None or getattr(p, "kind", "") != "split":
+            return
+        target = None
+        if dx != 0 and not p.vertical:
+            if dx < 0 and p.b is leaf:
+                target = p.a
+            elif dx > 0 and p.a is leaf:
+                target = p.b
+        elif dy != 0 and p.vertical:
+            if dy < 0 and p.b is leaf:
+                target = p.a
+            elif dy > 0 and p.a is leaf:
+                target = p.b
+        if target is None:
+            return
+        nxt = _first_leaf(target)
+        tab.active = nxt
+        nxt.term.grab_focus()
+
+    def _focus_next_pane(self, term):
+        entry = self._find(term)
+        if not entry:
+            return
+        tab, leaf = entry
+        if len(tab.leafs) < 2:
+            return
+        idx = tab.leafs.index(leaf)
+        nxt = tab.leafs[(idx + 1) % len(tab.leafs)]
+        tab.active = nxt
+        nxt.term.grab_focus()
 
     def _window_key(self, widget, event, *a):
         key = self.Gdk.keyval_name(event.keyval) or ""
@@ -4703,6 +5277,7 @@ class MintyTerm:
         mods = event.state
         ctrl = bool(mods & self.Gdk.ModifierType.CONTROL_MASK)
         shift = bool(mods & self.Gdk.ModifierType.SHIFT_MASK)
+        alt = bool(mods & self.Gdk.ModifierType.MOD1_MASK)
         term = widget
         if ctrl and shift:
             if key in ("C", "c"):
@@ -4712,18 +5287,40 @@ class MintyTerm:
                 term.paste_clipboard()
                 return True
             if key in ("T", "t"):
-                self.new_tab(self.current_cwd())
+                self.new_tab(self._cwd_of(term))
                 return True
             if key in ("W", "w"):
-                idx = self._index_of(term)
-                if idx is not None:
-                    self.GLib.idle_add(self._close_tab, idx, True)
+                entry = self._find(term)
+                if entry:
+                    self.GLib.idle_add(self._close_leaf_or_tab, *entry)
+                return True
+            if key in ("E", "e"):
+                self.split(self._leaf_of(term), True)
+                return True
+            if key in ("O", "o"):
+                self.split(self._leaf_of(term), False)
+                return True
+            if key in ("F", "f"):
+                self._focus_next_pane(term)
                 return True
             if key in ("N", "n"):
                 _spawn_detached()
                 return True
             if key in ("Q", "q"):
                 self.Gtk.main_quit()
+                return True
+        elif ctrl and alt:
+            if key == "Left":
+                self._nav_pane(term, -1, 0)
+                return True
+            if key == "Right":
+                self._nav_pane(term, 1, 0)
+                return True
+            if key == "Up":
+                self._nav_pane(term, 0, -1)
+                return True
+            if key == "Down":
+                self._nav_pane(term, 0, 1)
                 return True
         elif ctrl:
             if key in ("plus", "equal", "KP_Add"):
@@ -4844,6 +5441,8 @@ COMMANDS = {
     "config": ("Open the persistent minty config in your editor", cmd_config),
     "opencode": ("Start the OpenCode AI assistant (bundled)", cmd_opencode),
     "learn": ("Open the code guide with how-to snippets", cmd_learn),
+    "settings": ("Open the visual settings editor (settings get/set <key> <value>)", cmd_settings),
+    "tour": ("Replay the first-run minty walkthrough", cmd_tour),
     "menu": ("Open the side menu (or press Ctrl+T)", cmd_menu),
     "theme": ("Open the visual theme app (theme list/apply/export/import)", cmd_theme),
     "pkg": ("Package manager: pkg search/install/remove/update", cmd_pkg),
@@ -5111,6 +5710,10 @@ def main():
         raise SystemExit(run_terminal_gui())
     if len(sys.argv) > 1 and sys.argv[1] in ("learn", "--learn"):
         raise SystemExit(cmd_learn(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] in ("settings", "--settings"):
+        raise SystemExit(cmd_settings(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] in ("tour", "--tour"):
+        raise SystemExit(cmd_tour(sys.argv[2:]))
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")
@@ -5123,6 +5726,10 @@ def main():
         _restore_cwd()
     load_history()
     setup_readline()
+
+    if not os.path.exists(CONFIG_FILE):
+        if run_tour():
+            save_config(get_config())
 
     if find_opencode() is None:
         ensure_opencode()

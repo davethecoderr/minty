@@ -38,8 +38,15 @@ terminal window — no kitty required.
 - Launch the `minty terminal` desktop app, or run `minty terminal` in any
   terminal — it opens its own GTK3/VTE window with colours matched to your
   theme. Real terminal features: tabs (Ctrl+Shift+T, Ctrl+PageUp/Down,
-  Ctrl+1..9), font zoom (Ctrl +/-/0), copy/paste (Ctrl+Shift+C/V)
+  Ctrl+1..9), split panes (Ctrl+Shift+E down / Ctrl+Shift+O right,
+  Ctrl+Alt+arrows to navigate, Ctrl+Shift+F to focus the next pane),
+  font zoom (Ctrl +/-/0), copy/paste (Ctrl+Shift+C/V), a right-click
+  context menu, and clickable links (Ctrl+click or context menu)
 - Run `minty` in an existing terminal to start the minty shell there
+- First run shows a quick guided tour; `tour` replays it any time
+- `settings` — visual editor for the terminal (font size, colors, window
+  size, scrollback, notifications); `settings get/set <key> <value>` from
+  the shell
 - `learn` — built-in code guide: how to create/edit files, git, python,
   pipes, permissions, network and more (`minty learn git` filters it)
 - `open <file>` — open files/folders with your default app
