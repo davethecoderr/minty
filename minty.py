@@ -2,9 +2,12 @@
 """minty - a tiny shell that runs in your real terminal.
 
 Single file, everything built in: the shell, visual themes, a package
-manager, a tmux session manager, a VM manager, a systemd service manager,
-a process manager, a network/wifi manager, an fzf-style history picker and
-its own GTK3/VTE terminal emulator ('minty terminal').
+manager (pacman/paru/yay, apt, dnf, zypper), a tmux session manager, a VM
+manager, a systemd service manager, a process manager, a network/wifi
+manager, an fzf-style history picker, deep OpenCode AI integration
+('oc' / opencode, --new opens a fresh window) and its own GTK3/VTE
+terminal emulator ('minty terminal') that tracks the cwd via OSC 7 and
+inherits colors, palette and font from the active theme.
 Install with install.sh or run: python3 minty.py
 """
 
