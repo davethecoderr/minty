@@ -130,6 +130,7 @@ PROMPT_ROLE_ORDER = [
 DEFAULT_SETTINGS = {
     "show_banner": True,
     "show_hint": True,
+    "show_fetch": False,
     "font": "",
     "font_size": None,
 }
@@ -1418,7 +1419,8 @@ MENU_ITEMS = [
     ("Update system", "system_update", "Full system update with your package manager."),
     ("Update minty", "update", "Update minty from a local path or github repo."),
     ("Install/update opencode", "install_opencode", "Download or update the bundled OpenCode AI."),
-    ("System info", "fastfetch", "Show system info with fastfetch."),
+    ("System info (fastfetch)", "fastfetch", "Show system info with fastfetch."),
+    ("System info (neofetch)", "neofetch", "Show system info with neofetch."),
     ("Command history", "hist", "Browse command history (like Ctrl+R)."),
     ("Recent directories", "cdr", "Jump to a recently-visited directory."),
     ("tmux sessions", "tmux", "Create, attach to and kill tmux sessions."),
@@ -3126,6 +3128,7 @@ SETTINGS_SPEC = [
     ("restore_cwd", "bool", "Reopen last directory on start", "True"),
     ("notify_threshold", "float", "Notify after a command runs this long", "5.0"),
     ("duration_threshold", "float", "Show duration after a command runs this long", "3.0"),
+    ("show_fetch", "bool", "Show system info (fastfetch) on startup", "False"),
     ("suggest_install", "bool", "Suggest installing unknown commands", "True"),
 ]
 
@@ -4611,6 +4614,33 @@ def cmd_opencode(args):
     return run_proc(argv)
 
 
+def _ensure_tool(name: str) -> int:
+    """Offer to install a missing CLI tool with the package manager."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        err(name, f"not installed — run: sudo {detect_pm()['pm'] if detect_pm() else 'pkg'} install {name}")
+        return 127
+    try:
+        resp = input(f"install '{name}' with your package manager? [y/N] ")
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return 130
+    if resp.strip().lower() in ("y", "yes"):
+        return cmd_pkg(["install", name])
+    return 127
+
+
+def cmd_fastfetch(args):
+    if shutil.which("fastfetch"):
+        return run_any("fastfetch")
+    return _ensure_tool("fastfetch")
+
+
+def cmd_neofetch(args):
+    if shutil.which("neofetch"):
+        return run_any("neofetch")
+    return _ensure_tool("neofetch")
+
+
 def cmd_menu(args):
     sel = _menu_picker()
     if sel in ("close", ""):
@@ -4622,13 +4652,9 @@ def cmd_menu(args):
     if sel == "learn":
         return cmd_learn([])
     if sel == "fastfetch":
-        if shutil.which("fastfetch"):
-            return run_any("fastfetch")
-        u = os.uname()
-        print(f"{u.sysname} {u.release} {u.machine}")
-        print(f"Host: {u.nodename}")
-        print(f"User: {os.environ.get('USER')}")
-        return 0
+        return cmd_fastfetch([])
+    if sel == "neofetch":
+        return cmd_neofetch([])
     if sel == "config":
         return cmd_config([])
     if sel == "hist":
@@ -5615,6 +5641,8 @@ COMMANDS = {
     "hist": ("Browse command history (like Ctrl+R)", cmd_hist),
     "config": ("Open the persistent minty config in your editor", cmd_config),
     "opencode": ("Start the OpenCode AI assistant (--new opens a fresh window)", cmd_opencode),
+    "fastfetch": ("Show system info with fastfetch (installs if missing)", cmd_fastfetch),
+    "neofetch": ("Show system info with neofetch (installs if missing)", cmd_neofetch),
     "learn": ("Open the code guide with how-to snippets", cmd_learn),
     "settings": ("Open the visual settings editor (settings get/set <key> <value>)", cmd_settings),
     "tour": ("Replay the first-run minty walkthrough", cmd_tour),
@@ -5915,6 +5943,11 @@ def main():
     print(f"{BOLD}minty v{VERSION}{RESET} — type 'help' for commands, 'exit' to quit.  {DIM}(theme: {ACTIVE_THEME}){RESET}")
     if theme.settings.get("show_hint", True):
         print(f"{DIM}Ctrl+T menu · Ctrl+R history · !! rerun · z jump · oc (opencode) · learn · tmux vms svc proc net{RESET}")
+    if theme.settings.get("show_fetch", False):
+        if shutil.which("fastfetch"):
+            run_any("fastfetch")
+        elif shutil.which("neofetch"):
+            run_any("neofetch")
 
     global LAST_DURATION
     while True:

@@ -78,6 +78,9 @@ font from your active minty theme.
   (also available as a menu item under `Ctrl+T`)
 - `pkg` — search / install / remove packages and update your system
   (pacman/yay/paru, apt, dnf and zypper are all supported)
+- `fastfetch` / `neofetch` — show system info (if either isn't installed,
+  minty offers to install it with your package manager); set
+  `settings set show_fetch true` to show it on every startup
 - `tmux`, `vms`, `svc`, `proc`, `net` — visual managers for each
 - `hist` or `Ctrl+R` — browse command history
 - `Ctrl+T` — side menu
